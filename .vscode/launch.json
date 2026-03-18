@@ -1,0 +1,41 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "train",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/algos/CSDT.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                // "--debug_eval", "true",
+                "--logdir", "debug",
+                "--env", "kitchen-complete-v0",
+                // "--corruption_mode", "random",
+                "--corruption_mode", "adversarial",
+                "--corruption_tag", "act",
+                // "--save_model", "true",
+            ]
+        },
+        {
+            "name": "test",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/algos/CSDT.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--eval_id", "debug",
+                "--group", "RRDT_ra4_cnd_20_stnoe_noidcpr",
+                "--env", "door-expert-v0",
+                "--checkpoint_dir", "RRDT_door-expert-v0_adv_act_0_20260207162119_d48c6a87-5609-4dc9-b879-09eaff78647f",
+                "--eval_only", "true",
+                "--eval_attack", "true",
+            ]
+        },
+    ]
+}
