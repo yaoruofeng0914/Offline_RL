@@ -851,70 +851,100 @@ def test(config: TrainConfig, logger: Logger):
     func.set_seed(config.seed)
 
     env = gym.make(config.env)
-    env.seed(config.seed)
 
     config.state_dim = env.observation_space.shape[0]
     config.action_dim = env.action_space.shape[0]
     config.max_action = float(env.action_space.high[0])
     config.action_range = [
-            float(env.action_space.low.min()) + 1e-6,
-            float(env.action_space.high.max()) - 1e-6,
+        float(env.action_space.low.min()) + 1e-6,
+        float(env.action_space.high.max()) - 1e-6,
     ]
 
     # data & dataloader setup
     dataset = SequenceBuffer(config, logger)
-    logger.info(f"Dataset: {dataset.num_trajs} trajectories")
+    # logger.info(f"Dataset: {dataset.num_trajs} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 
-    # model
-    model = DecisionTransformer(
-        state_dim=config.state_dim,
-        action_dim=config.action_dim,
-        n_heads=config.num_heads,
-        n_blocks=config.num_layers,
-        hidden_dim=config.embedding_dim,
-        context_len=config.seq_len,
-        drop_p=config.model_drop_p,
-        action_space=env.action_space,
+    env = func.wrap_env(
+        env,
         state_mean=dataset.state_mean,
         state_std=dataset.state_std,
         reward_scale=config.reward_scale,
-        max_timestep=config.episode_len,
-        drop_aware=config.drop_aware,
-        device=config.device,
-    )
-    model.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, "final_policy.pth")))
-    model.eval()
-    # logger.info(f"Network: \n{str(model)}")
-    logger.info(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
+    )  # ?
+    env.seed(config.seed)
 
     if config.eval_attack:
-                state_std, act_std, rew_std, rew_min = func.get_state_std(config)
-                eval_attacker = Evaluation_Attacker(
-                    config, config.env, config.corruption_agent, config.eval_attack_eps,
-                    config.state_dim, config.action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
-                    MODEL_PATH[config.corruption_agent],
-                )
-                print("eval_attack: True")
+        state_std, act_std, rew_std, rew_min = func.get_state_std(config)
+        eval_attacker = Evaluation_Attacker(
+            config, config.env, config.corruption_agent, config.eval_attack_eps,
+            config.state_dim, config.action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
+            MODEL_PATH[config.corruption_agent],
+        )
+        print("eval_attack: True")
     else:
         eval_attacker = None
         print("eval_attack: False")
 
-    eval_log = eval_fn(config, env, model, eval_attacker)
+    all_files = os.listdir(config.checkpoint_dir)
+    model_epoches = [
+        f for f in all_files
+        if f.startswith("policy") and f.endswith(".pth")
+    ]
+    model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
 
-    for k, v in eval_log.items():
-        logger.record(k, v)
-    logger.dump(0)
+    best_score = -np.inf
+    best_score_50 = -np.inf
+    for i, model_epoch in enumerate(model_epoches):
+        epoch = int(model_epoch.split(".")[0].split("_")[1])
+        print(f"eval epoch: {epoch}")
 
-    score = eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean"]
-    eval_atta_tag = "attack" if config.eval_attack else "clean"
-    # train_time = config.checkpoint_dir.split("_")[-2]
-    log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(logger.get_dir()))), f"test_{config.group}_{config.corruption_mode}_{eval_atta_tag}_{config.test_time}.txt")
-    title = f"{config.group}_{config.env}_{config.corruption_mode}_{config.corruption_tag}_{eval_atta_tag}_{config.seed}"
-    with open(log_path, "a") as f:
-        f.write(f"{title}: {score:.4f}\n")
+        # model
+        model = DecisionTransformer(
+            state_dim=config.state_dim,
+            action_dim=config.action_dim,
+            n_heads=config.num_heads,
+            n_blocks=config.num_layers,
+            hidden_dim=config.embedding_dim,
+            context_len=config.seq_len,
+            drop_p=config.model_drop_p,
+            action_space=env.action_space,
+            state_mean=dataset.state_mean,
+            state_std=dataset.state_std,
+            reward_scale=config.reward_scale,
+            max_timestep=config.episode_len,
+            drop_aware=config.drop_aware,
+            device=config.device,
+        )
+        model.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch)), strict=False)
+        model.eval()
+        # logger.info(f"Network: \n{str(model)}")
+        # logger.info(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
 
+        eval_log = eval_fn(config, env, model, eval_attacker)
+        for k, v in eval_log.items():
+            logger.record(k, v)
+        logger.dump(0)
 
+        now_score = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean"],
+                        eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean"])
+        if i == 0:
+            with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "w") as f:
+                f.write(f"{now_score:.4f}_{epoch}\n")
+        if i > 0:
+            with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
+                f.write(f"{now_score:.4f}_{epoch}\n")
+        if now_score > best_score:
+            best_score = now_score
+            with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
+                f.write(f"{best_score:.4f}_{epoch}")
+        if epoch > config.num_epochs - 50:
+            if now_score > best_score_50:
+                best_score_50 = now_score
+                with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
+                    f.write(f"{best_score_50:.4f}_{epoch}")
+        if epoch == config.num_epochs:
+            with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
+                f.write(f"{now_score:.4f}_{epoch}")
 @pyrallis.wrap()
 def main(config: TrainConfig):
     logger = init_logger(config)
