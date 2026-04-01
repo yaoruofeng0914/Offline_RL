@@ -40,7 +40,7 @@ def discounted_cumsum(x: np.ndarray, gamma: float) -> np.ndarray:
 def load_d4rl_trajectories(
         config, env_name: str, gamma: float = 1.0, logger: Logger = None
 ) -> Tuple[List[DefaultDict[str, np.ndarray]], Dict[str, Any]]:
-    dataset_path = os.path.join(config.dataset_path, f"{env_name}_ratio_{config.sample_ratio}.pt")
+    dataset_path = os.path.join(config.dataset_path, "datasets", f"{env_name}_ratio_{config.sample_ratio}.pt")
     dataset = torch.load(dataset_path)
     attack_mask = np.ones_like(dataset["rewards"]) * -1
     if config.corruption_mode != "none":  # New

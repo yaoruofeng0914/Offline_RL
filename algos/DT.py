@@ -48,6 +48,10 @@ class TrainConfig:
     attention_dropout: float = 0.0
     residual_dropout: float = 0.1
     embedding_dropout: float = None
+    mlp_embedding: bool = False
+    mlp_head: bool = False
+    mlp_reward: bool = True
+    embed_order: str = "rsa"
     # training params
     learning_rate: float = 1e-4
     betas: Tuple[float, float] = (0.9, 0.999)
@@ -106,7 +110,7 @@ class TrainConfig:
             if self.corruption_tag == "rew":
                 self.corruption_obs = 0.0
                 self.corruption_act = 0.0
-                self.corruption_rew = 1.0  
+                self.corruption_rew = 1.0
             # target_returns and reward_scale
             if self.env.startswith("antmaze"):
                 self.target_returns = [1.0, 0.5]
@@ -159,19 +163,19 @@ class TrainConfig:
             self.warmup_steps = int(0.1 * self.update_steps)
             self.decay_steps = int(0.1 * self.update_steps)
         # evaluation
-        if self.eval_only:
-            assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
-            self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
-            with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
-                config = json.load(f)
-            unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack", "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
-            for key, value in config.items():
-                if key not in unoverwritten_keys:
-                    try:
-                        value = eval(value)
-                    except:
-                        pass
-                    self.__dict__[key] = value
+        # if self.eval_only:
+            # assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
+            #self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
+            #with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
+                #config = json.load(f)
+            #unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack", "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
+            #for key, value in config.items():
+                #if key not in unoverwritten_keys:
+                    #try:
+                        #value = eval(value)
+                    #except:
+                        #pass
+                    #self.__dict__[key] = value
                     # print(f"Set {key} to {value}")
         self.eval_attack_mode = self.corruption_mode # random, adversarial
         self.eval_attack_eps = 1
@@ -253,7 +257,7 @@ def train(config: TrainConfig, logger: Logger):
     else:
         eval_attacker = None
         print("eval_attack: False")
-    
+
     if config.debug_eval:
         model.eval()
         eval_log = dt_func.eval_fn(config, env, model, eval_attacker)
@@ -262,7 +266,7 @@ def train(config: TrainConfig, logger: Logger):
         for k, v in eval_log.items():
             logger.record(k, v)
         logger.dump(0)
-    
+
     # if config.use_wandb:
     #     wandb.log({"epoch": 0, **eval_log})
 
@@ -387,7 +391,7 @@ def test(config: TrainConfig, logger: Logger):
         reward_scale=config.reward_scale,
     )
     env.seed(config.seed)
-    
+
     if config.eval_attack:
         state_std, act_std, rew_std, rew_min = func.get_state_std(config)
         eval_attacker = Evaluation_Attacker(
@@ -399,10 +403,10 @@ def test(config: TrainConfig, logger: Logger):
     else:
         eval_attacker = None
         print("eval_attack: False")
-            
+
     all_files = os.listdir(config.checkpoint_dir)
     model_epoches = [
-        f for f in all_files 
+        f for f in all_files
         if f.startswith("policy") and f.endswith(".pth")
     ]
     model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
@@ -412,19 +416,19 @@ def test(config: TrainConfig, logger: Logger):
     for i, model_epoch in enumerate(model_epoches):
         epoch = int(model_epoch.split(".")[0].split("_")[1])
         print(f"eval epoch: {epoch}")
-        
+
         # model
         model = set_model(config)
         model.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch)), strict=False)
         model.eval()
         # logger.info(f"Network: \n{str(model)}")
         # logger.info(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
-    
+
         eval_log = dt_func.eval_fn(config, env, model, eval_attacker)
         for k, v in eval_log.items():
             logger.record(k, v)
         logger.dump(0)
-    
+
         now_score = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean"], eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean"])
         if i == 0:
             with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "w") as f:
@@ -440,10 +444,10 @@ def test(config: TrainConfig, logger: Logger):
             if now_score > best_score_50:
                 best_score_50 = now_score
                 with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
-                    f.write(f"{best_score_50:.4f}_{epoch}")  
+                    f.write(f"{best_score_50:.4f}_{epoch}")
         if epoch == config.num_epochs:
             with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
-                f.write(f"{now_score:.4f}_{epoch}")  
+                f.write(f"{now_score:.4f}_{epoch}")
 
 @pyrallis.wrap()
 def main(config: TrainConfig):

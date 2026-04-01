@@ -15,6 +15,7 @@ import pyrallis
 import torch
 import torch.nn as nn
 import utils.functions as func
+import utils.dt_functions as dt_func
 
 from tqdm import trange
 from torch.distributions import Normal
@@ -38,6 +39,7 @@ class TrainConfig:
     # Wandb logging
     use_wandb: int = 1
     # model params
+    seq_len: int = 20
     n_hidden: int = 2
     hidden_dim: int = 256
     num_critics: int = 10
@@ -47,6 +49,17 @@ class TrainConfig:
     critic_learning_rate: float = 3e-4
     alpha_learning_rate: float = 3e-4
     max_action: float = 1.0
+    embedding_dim: int = 128
+    num_layers: int = 3
+    num_heads: int = 1
+    episode_len: int = 1000
+    attention_dropout: float = 0.0
+    residual_dropout: float = 0.1
+    embedding_dropout: float = None
+    mlp_embedding: bool = False
+    mlp_head: bool = False
+    mlp_reward: bool = True
+    embed_order: str = "rsa"
     # training params
     buffer_size: int = 1_000_000
     group: str = os.path.basename(__file__).rstrip(".py")
@@ -59,6 +72,7 @@ class TrainConfig:
     normalize_reward: bool = False
     # evaluation params
     eval_every: int = 10
+    reward_scale: float = 0.001
     eval_episodes: int = 10
     # general params
     checkpoints_path: Optional[str] = None
@@ -163,20 +177,20 @@ class TrainConfig:
             self.warmup_steps = int(0.1 * self.update_steps)
             self.decay_steps = int(0.1 * self.update_steps)
         # evaluation
-        if self.eval_only:
-            assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
-            self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
-            with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
-                train_config = json.load(f)
-            unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack", "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
-            for key, value in train_config.items():
-                if key not in unoverwritten_keys:
-                    try:
-                        value = eval(value)
-                    except:
-                        pass
-                    self.__dict__[key] = value
-                    # print(f"Set {key} to {value}")
+        # if self.eval_only:
+            # assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
+            # self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
+            # with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
+            #     train_config = json.load(f)
+            # unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack", "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
+            # for key, value in train_config.items():
+            #     if key not in unoverwritten_keys:
+            #         try:
+            #             value = eval(value)
+            #         except:
+            #             pass
+            #         self.__dict__[key] = value
+            #         # print(f"Set {key} to {value}")
         self.eval_attack_mode = self.corruption_mode # random, adversarial
         self.eval_attack_eps = 1
         self.eval_corruption_rate = 0.3
@@ -651,17 +665,10 @@ def test(config: TrainConfig, logger: Logger):
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     max_action = float(env.action_space.high[0])
-
-    if config.sample_ratio < 1.0:
-        dataset_path = os.path.join(config.dataset_path, "original", f"{config.env}_ratio_{config.sample_ratio}.pt")
-        dataset = torch.load(dataset_path)
-    else:
-        h5path = (
-            config.dataset_path
-            if config.dataset_path is None
-            else os.path.expanduser(f"{config.dataset_path}/{config.env}.hdf5")
-        )
-        dataset = env.get_dataset(h5path=h5path)
+    # data & dataloader setup
+    dataset = dt_func.SequenceDataset(config, logger)
+    logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
+    # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 
     ##### corrupt
     if config.corruption_mode != "none":

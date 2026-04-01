@@ -2,7 +2,6 @@
 # 1. https://github.com/hukz18/DeFog  # noqa
 import os, sys
 sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
-
 from typing import Any, DefaultDict, Dict, List, Optional, Tuple
 
 import traceback
@@ -37,15 +36,16 @@ MODEL_PATH = {
 @dataclass
 class TrainConfig:
     # Experiment
+    eval_episodes: int = 10
     eval_every: int = 10
     n_episodes: int = 10  # How many episodes run during evaluation
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     deterministic_torch: bool = False
     num_epochs: int = 100
-    eval_final: int =100
+    eval_final: int = 100
     num_updates_on_epoch: int = 1000
     # model params
-    embedding_dim: int = 128 # 768
+    embedding_dim: int = 128  # 768
     num_layers: int = 3
     num_heads: int = 1
     seq_len: int = 20
@@ -91,15 +91,15 @@ class TrainConfig:
     debug: bool = False
     alg_type: str = os.path.basename(__file__).rstrip(".py")
     logdir: str = "results"
-    dataset_path: str = os.path.expanduser("~/Offline_RL/datasets")
+    dataset_path: str = os.path.expanduser("~/Offline_RL/")
     sample_ratio: float = 1.0
     save_model: bool = False
     debug_eval: bool = False
     ###### corruption
-    corruption_agent: str = "IQL" # "EDAC"
-    corruption_seed: int = 0 # 2023
+    corruption_agent: str = "IQL"  # "EDAC"
+    corruption_seed: int = 0  # 2023
     corruption_mode: str = ""  # random, adversarial
-    corruption_tag: str = "" # obs, act, rew
+    corruption_tag: str = ""  # obs, act, rew
     corruption_next_obs: float = 0.0  # 0 or 1
     # corruption_range: float = 1.0
     corruption_rate: float = 0.3
@@ -109,7 +109,8 @@ class TrainConfig:
 
     def __post_init__(self):
         # train
-        if not self.eval_only:
+        # if not self.eval_only:
+        if True:
             if self.corruption_tag == "obs":
                 self.corruption_obs = 1.0
                 self.corruption_act = 0.0
@@ -121,8 +122,8 @@ class TrainConfig:
             if self.corruption_tag == "rew":
                 self.corruption_obs = 0.0
                 self.corruption_act = 0.0
-                self.corruption_rew = 1.0  
-            # target_returns and reward_scale
+                self.corruption_rew = 1.0
+                # target_returns and reward_scale
             if self.env.startswith("antmaze"):
                 self.target_returns = [1.0, 0.5]
                 self.reward_scale = 1.0
@@ -136,7 +137,7 @@ class TrainConfig:
                 self.target_returns = [5000, 2500]
                 self.reward_scale = 0.001
             if self.env.startswith("kitchen"):
-                self.target_returns = [400, 500] # 500
+                self.target_returns = [400, 500]  # 500
                 self.reward_scale = 1.0
             if self.env.startswith("door"):
                 self.target_returns = [2900, 1450]
@@ -180,21 +181,22 @@ class TrainConfig:
             self.warmup_steps = int(0.1 * self.update_steps)
             self.decay_steps = int(0.1 * self.update_steps)
         # evaluation
-        if self.eval_only:
-            assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
-            self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
-            with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
-                train_config = json.load(f)
-            unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack", "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
-            for key, value in train_config.items():
-                if key not in unoverwritten_keys:
-                    try:
-                        value = eval(value)
-                    except:
-                        pass
-                    self.__dict__[key] = value
-                    # print(f"Set {key} to {value}")
-        self.eval_attack_mode = self.corruption_mode # random, adversarial
+        # if self.eval_only:
+        #     assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
+        #     self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
+        #     with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
+        #         train_config = json.load(f)
+        #     unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack",
+        #                           "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
+        #     for key, value in train_config.items():
+        #         if key not in unoverwritten_keys:
+        #             try:
+        #                 value = eval(value)
+        #             except:
+        #                 pass
+        #             self.__dict__[key] = value
+        #             # print(f"Set {key} to {value}")
+        self.eval_attack_mode = self.corruption_mode  # random, adversarial
         self.eval_attack_eps = 1
         self.eval_corruption_rate = 0.3
         if self.eval_attack_mode == "random" and self.corruption_tag == "rew":
@@ -203,7 +205,7 @@ class TrainConfig:
 
 # some utils functionalities specific for Decision Transformer
 def pad_along_axis(
-    arr: np.ndarray, pad_to: int, axis: int = 0, fill_value: float = 0.0
+        arr: np.ndarray, pad_to: int, axis: int = 0, fill_value: float = 0.0
 ) -> np.ndarray:
     pad_size = pad_to - arr.shape[axis]
     if pad_size <= 0:
@@ -223,10 +225,10 @@ def discounted_cumsum(x: np.ndarray, gamma: float) -> np.ndarray:
 
 
 def load_d4rl_trajectories(
-    config: TrainConfig, env_name: str, gamma: float = 1.0, logger: Logger = None
+        config: TrainConfig, env_name: str, gamma: float = 1.0, logger: Logger = None
 ) -> Tuple[List[DefaultDict[str, np.ndarray]], Dict[str, Any]]:
     if config.sample_ratio < 1.0:
-        dataset_path = os.path.join(config.dataset_path, "original", f"{env_name}_ratio_{config.sample_ratio}.pt")
+        dataset_path = os.path.join(config.dataset_path, "datasets", f"{env_name}_ratio_{config.sample_ratio}.pt")
         dataset = torch.load(dataset_path)
     else:
         h5path = (
@@ -270,8 +272,8 @@ def load_d4rl_trajectories(
 
     # needed for normalization, weighted sampling, other stats can be added also
     info = {
-        "obs_mean": state_mean, # dataset["observations"].mean(0, keepdims=True),
-        "obs_std": state_std, # dataset["observations"].std(0, keepdims=True) + 1e-6,
+        "obs_mean": state_mean,  # dataset["observations"].mean(0, keepdims=True),
+        "obs_std": state_std,  # dataset["observations"].std(0, keepdims=True) + 1e-6,
         "traj_lens": np.array(traj_len),
     }
     return traj, info
@@ -304,26 +306,32 @@ class SequenceBuffer():
             observations, actions, rewards = traj['observations'], traj['actions'], traj['rewards']
             # observations, actions, rewards = traj['observations'], traj['actions'], -traj['rewards']
             # observations, actions, rewards = traj['observations'], traj['actions'], self.rng.uniform(-1, 1, size=traj['rewards'].shape)
-            assert observations.shape[0] == actions.shape[0] == rewards.shape[0], 'observations, actions, rewards should have the same length'
+            assert observations.shape[0] == actions.shape[0] == rewards.shape[
+                0], 'observations, actions, rewards should have the same length'
             self.traj_length[i] = observations.shape[0]
 
             self.states[self.traj_sp[i]: self.traj_sp[i] + self.traj_length[i]] = observations
             self.actions[self.traj_sp[i]: self.traj_sp[i] + self.traj_length[i]] = actions
-            self.rewards_to_go[self.traj_sp[i]: self.traj_sp[i] + self.traj_length[i]] = discounted_cumsum(rewards,  gamma=1.0)
+            self.rewards_to_go[self.traj_sp[i]: self.traj_sp[i] + self.traj_length[i]] = discounted_cumsum(rewards,
+                                                                                                           gamma=1.0)
             self.traj_returns[i] = np.sum(rewards)
             traj_pointer += self.traj_length[i]
 
-        assert config.sample_type in ['uniform', 'traj_return', 'traj_length'], 'sample_type should be one of [uniform, traj_return, traj_length]'
-        self.p_sample = np.ones(self.num_trajs) / self.num_trajs if  config.sample_type == 'uniform' else self.traj_returns / \
-            self.traj_returns.sum() if  config.sample_type == 'traj_return' else self.traj_length / self.traj_length.sum()
+        assert config.sample_type in ['uniform', 'traj_return',
+                                      'traj_length'], 'sample_type should be one of [uniform, traj_return, traj_length]'
+        self.p_sample = np.ones(
+            self.num_trajs) / self.num_trajs if config.sample_type == 'uniform' else self.traj_returns / \
+                                                                                     self.traj_returns.sum() if config.sample_type == 'traj_return' else self.traj_length / self.traj_length.sum()
         # self.state_mean, self.state_std = self.states.mean(axis=0), self.states.std(axis=0) + 1e-6
         self.state_mean, self.state_std = info["obs_mean"], info["obs_std"]
         self.drop_fn = get_drop_fn(config, self.size, self.traj_sp, self.rng)
-            
+
     def sample(self, batch_size):
         selected_traj = self.rng.choice(np.arange(self.num_trajs), batch_size, replace=True, p=self.p_sample)
         selected_traj_sp = self.traj_sp[selected_traj]
-        selected_offset = np.floor(self.rng.random(batch_size) * (self.traj_length[selected_traj] - self.context_len)).astype(np.int32).clip(min=0)
+        selected_offset = np.floor(
+            self.rng.random(batch_size) * (self.traj_length[selected_traj] - self.context_len)).astype(np.int32).clip(
+            min=0)
         selected_sp = selected_traj_sp + selected_offset
         selected_ep = selected_sp + self.traj_length[selected_traj].clip(max=self.context_len)
 
@@ -331,8 +339,9 @@ class SequenceBuffer():
         selected_index = selected_sp[:, None] + np.arange(self.context_len)
         selected_index = np.where(selected_index < selected_ep[:, None], selected_index, -1)
         masks = selected_index >= 0
-        timesteps = selected_offset[:, None] + np.arange(self.context_len)  # we don't care about the timestep for those padded steps
-        
+        timesteps = selected_offset[:, None] + np.arange(
+            self.context_len)  # we don't care about the timestep for those padded steps
+
         # update and get drop mask
         self.drop_fn.step()
         dropsteps = self.drop_fn.get_dropsteps(selected_index)
@@ -340,7 +349,8 @@ class SequenceBuffer():
 
         states = torch.as_tensor(self.states[observation_index, :]).to(dtype=torch.float32, device=self.device)
         actions = torch.as_tensor(self.actions[selected_index, :]).to(dtype=torch.float32, device=self.device)
-        rewards_to_go = torch.as_tensor(self.rewards_to_go[observation_index, None]).to(dtype=torch.float32, device=self.device)
+        rewards_to_go = torch.as_tensor(self.rewards_to_go[observation_index, None]).to(dtype=torch.float32,
+                                                                                        device=self.device)
         timesteps = torch.as_tensor(timesteps).to(dtype=torch.int32, device=self.device)
         dropsteps = torch.as_tensor(dropsteps).to(dtype=torch.int32, device=self.device)
 
@@ -392,7 +402,7 @@ class MaskedCausalAttention(nn.Module):
         attention = self.att_drop(normalized_weights @ v)
 
         # gather heads and project (B, N, T, D) -> (B, T, N*D)
-        attention = attention.transpose(1, 2).contiguous().view(B, T, N*D)
+        attention = attention.transpose(1, 2).contiguous().view(B, T, N * D)
 
         out = self.proj_drop(self.proj_net(attention))
         return out
@@ -421,7 +431,7 @@ class Block(nn.Module):
 
 
 class DecisionTransformer(nn.Module):
-    def __init__(self, state_dim, action_dim, n_heads, n_blocks, hidden_dim, context_len, drop_p, 
+    def __init__(self, state_dim, action_dim, n_heads, n_blocks, hidden_dim, context_len, drop_p,
                  action_space, state_mean, state_std, reward_scale, max_timestep, drop_aware, device):
         super().__init__()
 
@@ -474,10 +484,10 @@ class DecisionTransformer(nn.Module):
 
     def _norm_action(self, action):
         return (action + 1) * (self.action_space.high - self.action_space.low) / 2 + self.action_space.low
-    
+
     def _norm_state(self, state):
         return (state - self.state_mean) / self.state_std
-    
+
     def _norm_reward_to_go(self, reward_to_go):
         return reward_to_go * self.reward_scale
 
@@ -489,7 +499,8 @@ class DecisionTransformer(nn.Module):
         return super().to(device)
 
     def freeze_trunk(self):
-        freezed_models = [self.embed_state, self.embed_action, self.embed_rtg, self.embed_timestep, self.blocks, self.embed_ln]
+        freezed_models = [self.embed_state, self.embed_action, self.embed_rtg, self.embed_timestep, self.blocks,
+                          self.embed_ln]
         for model in freezed_models:
             for p in model.parameters():
                 p.requires_grad = False
@@ -541,30 +552,30 @@ class DecisionTransformer(nn.Module):
         h = h.reshape(B, T, 3, self.hidden_dim).permute(0, 2, 1, 3)
 
         # get predictions
-        return_preds = self.predict_rtg(h[:, 2])     # predict next rtg given r, s, a
-        state_preds = self.predict_state(h[:, 2])    # predict next state given r, s, a
+        return_preds = self.predict_rtg(h[:, 2])  # predict next rtg given r, s, a
+        state_preds = self.predict_state(h[:, 2])  # predict next state given r, s, a
         action_preds = self.predict_action(h[:, 1])  # predict action given r, s
 
         # action_preds = self._norm_action(action_preds)
         return state_preds, action_preds, return_preds
-    
+
     def save(self, save_name):
         os.makedirs('models', exist_ok=True)
         torch.save(self.state_dict(), os.path.join('models', f'{save_name}.pt'))
-    
+
     def load(self, load_name):
         self.load_state_dict(torch.load(os.path.join('models', f'{load_name}.pt')))
 
 
 @torch.no_grad()
 def eval_rollout(
-    model: DecisionTransformer,
-    env: gym.Env,
-    target_return: float,
-    eval_attacker: Evaluation_Attacker = None,
-    eval_corruption_rate: float = 0.0,
-    eval_attack_tag: str = "obs",
-    device: str = "cpu",
+        model: DecisionTransformer,
+        env: gym.Env,
+        target_return: float,
+        eval_attacker: Evaluation_Attacker = None,
+        eval_corruption_rate: float = 0.0,
+        eval_attack_tag: str = "obs",
+        device: str = "cpu",
 ) -> Tuple[float, float]:
     # parallel evaluation with vectorized environment
     action_range = [
@@ -588,7 +599,7 @@ def eval_rollout(
         attack_flag = np.random.rand()
         if attack_flag < eval_corruption_rate:
             state = eval_attacker.attack_obs(state)
-    
+
     states = torch.zeros((episodes, max_timestep, state_dim), dtype=torch.float32, device=device)
     actions = torch.zeros((episodes, max_timestep, act_dim), dtype=torch.float32, device=device)
     rewards_to_go = torch.zeros((episodes, max_timestep, 1), dtype=torch.float32, device=device)
@@ -599,12 +610,12 @@ def eval_rollout(
         states[:, timestep] = torch.from_numpy(state).to(device)
         rewards_to_go[:, timestep] = reward_to_go - torch.from_numpy(returns).to(device).unsqueeze(-1)
         dropsteps[timestep] = dropstep
-        obs_index = torch.arange(max(0, timestep-context_len+1), timestep+1)
+        obs_index = torch.arange(max(0, timestep - context_len + 1), timestep + 1)
         _, action_preds, _ = model.forward(states[:, obs_index],
-                                        actions[:, obs_index],
-                                        rewards_to_go[:, obs_index - dropsteps[obs_index].cpu()], # drop rewards
-                                        timesteps[None, obs_index],
-                                        dropsteps[None, obs_index])
+                                           actions[:, obs_index],
+                                           rewards_to_go[:, obs_index - dropsteps[obs_index].cpu()],  # drop rewards
+                                           timesteps[None, obs_index],
+                                           dropsteps[None, obs_index])
 
         action = action_preds[:, -1].detach().cpu()
         if eval_attacker is not None and eval_attack_tag == "act":
@@ -680,8 +691,8 @@ def train(config: TrainConfig, logger: Logger):
     config.action_dim = env.action_space.shape[0]
     config.max_action = float(env.action_space.high[0])
     config.action_range = [
-            float(env.action_space.low.min()) + 1e-6,
-            float(env.action_space.high.max()) - 1e-6,
+        float(env.action_space.low.min()) + 1e-6,
+        float(env.action_space.high.max()) - 1e-6,
     ]
 
     # data & dataloader setup
@@ -733,7 +744,7 @@ def train(config: TrainConfig, logger: Logger):
     else:
         eval_attacker = None
         print("eval_attack: False")
-    
+
     if config.debug_eval:
         model.eval()
         eval_log = eval_fn(config, env, model, eval_attacker)
@@ -742,7 +753,7 @@ def train(config: TrainConfig, logger: Logger):
         for k, v in eval_log.items():
             logger.record(k, v)
         logger.dump(0)
-    
+
     # model.eval()
     # eval_log = eval_fn(config, env, model)
     # logger.record("epoch", 0)
@@ -761,11 +772,12 @@ def train(config: TrainConfig, logger: Logger):
         time_start = time.time()
         for _ in trange(config.num_updates_on_epoch, desc="Epoch", leave=False):
             log_dict = {}
-            
+
             states, actions, rewards_to_go, timesteps, dropsteps, mask = dataset.sample(config.batch_size)
             padding_mask = torch.from_numpy(~mask).to(dtype=torch.bool, device=config.device)
             # no need for attention mask for the model as we always pad on the right side, whose attention is ignored by the casual mask anyway
-            state_preds, action_preds, return_preds = model.forward(states, actions, rewards_to_go, timesteps, dropsteps, padding_mask)
+            state_preds, action_preds, return_preds = model.forward(states, actions, rewards_to_go, timesteps,
+                                                                    dropsteps, padding_mask)
             action_preds = action_preds[mask]
             loss = F.mse_loss(action_preds, actions[mask].detach(), reduction='mean')
 
@@ -814,13 +826,14 @@ def train(config: TrainConfig, logger: Logger):
                 wandb.log({"epoch": epoch, **update_log})
                 wandb.log({"epoch": epoch, **eval_log})
 
-            now_score = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean"], eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean"])
+            now_score = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean"],
+                            eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean"])
             with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
-                    f.write(f"{now_score:.4f}_{epoch}\n")
+                f.write(f"{now_score:.4f}_{epoch}\n")
             if now_score > best_score:
                 best_score = now_score
                 with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
-                        f.write(f"{best_score:.4f}_{epoch}")
+                    f.write(f"{best_score:.4f}_{epoch}")
                 if config.save_model:
                     torch.save(
                         model.state_dict(),
@@ -830,7 +843,7 @@ def train(config: TrainConfig, logger: Logger):
                 if now_score > best_score_50:
                     best_score_50 = now_score
                     with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
-                            f.write(f"{best_score_50:.4f}_{epoch}")
+                        f.write(f"{best_score_50:.4f}_{epoch}")
                     if config.save_model:
                         torch.save(
                             model.state_dict(),
@@ -838,7 +851,7 @@ def train(config: TrainConfig, logger: Logger):
                         )
             if epoch == config.num_epochs:
                 with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
-                        f.write(f"{now_score:.4f}_{epoch}")
+                    f.write(f"{now_score:.4f}_{epoch}")
                 if config.save_model:
                     torch.save(
                         model.state_dict(),
@@ -851,6 +864,7 @@ def test(config: TrainConfig, logger: Logger):
     func.set_seed(config.seed)
 
     env = gym.make(config.env)
+    env.seed(config.seed)
 
     config.state_dim = env.observation_space.shape[0]
     config.action_dim = env.action_space.shape[0]
@@ -862,89 +876,65 @@ def test(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = SequenceBuffer(config, logger)
-    # logger.info(f"Dataset: {dataset.num_trajs} trajectories")
+    logger.info(f"Dataset: {dataset.num_trajs} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
-
-    env = func.wrap_env(
-        env,
+    # model
+    model = DecisionTransformer(
+        state_dim=config.state_dim,
+        action_dim=config.action_dim,
+        n_heads=config.num_heads,
+        n_blocks=config.num_layers,
+        hidden_dim=config.embedding_dim,
+        context_len=config.seq_len,
+        drop_p=config.model_drop_p,
+        action_space=env.action_space,
         state_mean=dataset.state_mean,
         state_std=dataset.state_std,
         reward_scale=config.reward_scale,
-    )  # ?
-    env.seed(config.seed)
-
-    if config.eval_attack:
-        state_std, act_std, rew_std, rew_min = func.get_state_std(config)
-        eval_attacker = Evaluation_Attacker(
-            config, config.env, config.corruption_agent, config.eval_attack_eps,
-            config.state_dim, config.action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
-            MODEL_PATH[config.corruption_agent],
-        )
-        print("eval_attack: True")
-    else:
-        eval_attacker = None
-        print("eval_attack: False")
-
+        max_timestep=config.episode_len,
+        drop_aware=config.drop_aware,
+        device=config.device,
+    )
     all_files = os.listdir(config.checkpoint_dir)
     model_epoches = [
         f for f in all_files
         if f.startswith("policy") and f.endswith(".pth")
     ]
     model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
-
-    best_score = -np.inf
-    best_score_50 = -np.inf
     for i, model_epoch in enumerate(model_epoches):
         epoch = int(model_epoch.split(".")[0].split("_")[1])
         print(f"eval epoch: {epoch}")
-
-        # model
-        model = DecisionTransformer(
-            state_dim=config.state_dim,
-            action_dim=config.action_dim,
-            n_heads=config.num_heads,
-            n_blocks=config.num_layers,
-            hidden_dim=config.embedding_dim,
-            context_len=config.seq_len,
-            drop_p=config.model_drop_p,
-            action_space=env.action_space,
-            state_mean=dataset.state_mean,
-            state_std=dataset.state_std,
-            reward_scale=config.reward_scale,
-            max_timestep=config.episode_len,
-            drop_aware=config.drop_aware,
-            device=config.device,
-        )
-        model.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch)), strict=False)
+        model.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch)))
         model.eval()
-        # logger.info(f"Network: \n{str(model)}")
-        # logger.info(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
+        # logger.info(f"Actor Network: \n{str(actor)}")
 
-        eval_log = eval_fn(config, env, model, eval_attacker)
+        if config.eval_attack:
+            state_std, act_std, rew_std, rew_min = func.get_state_std(config)
+            eval_attacker = Evaluation_Attacker(
+                config, config.env, config.corruption_agent, config.eval_attack_eps,
+                config.state_dim, config.action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
+                MODEL_PATH[config.corruption_agent],
+            )
+            print("eval_attack: True")
+        else:
+            eval_attacker = None
+            print("eval_attack: False")
+
+        eval_log = func.eval(config, env, model, eval_attacker)
         for k, v in eval_log.items():
             logger.record(k, v)
         logger.dump(0)
 
-        now_score = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean"],
-                        eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean"])
-        if i == 0:
-            with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "w") as f:
-                f.write(f"{now_score:.4f}_{epoch}\n")
-        if i > 0:
-            with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
-                f.write(f"{now_score:.4f}_{epoch}\n")
-        if now_score > best_score:
-            best_score = now_score
-            with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
-                f.write(f"{best_score:.4f}_{epoch}")
-        if epoch > config.num_epochs - 50:
-            if now_score > best_score_50:
-                best_score_50 = now_score
-                with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
-                    f.write(f"{best_score_50:.4f}_{epoch}")
-        if epoch == config.num_epochs:
-            with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
-                f.write(f"{now_score:.4f}_{epoch}")
+        score = eval_log[f"eval/normalized_score_mean"]
+        eval_atta_tag = "attack" if config.eval_attack else "clean"
+        # train_time = config.checkpoint_dir.split("_")[-2]
+        log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(logger.get_dir()))),
+                                f"test_{config.group}_{config.env}_{config.corruption_mode}_{eval_atta_tag}_{model_epoch}_{config.test_time}.txt")
+        title = f"{config.group}_{config.env}_{config.corruption_mode}_{config.corruption_tag}_{eval_atta_tag}_{config.seed}"
+        with open(log_path, "a") as f:
+            f.write(f"{title}: {score:.4f}\n")
+
+
 @pyrallis.wrap()
 def main(config: TrainConfig):
     logger = init_logger(config)

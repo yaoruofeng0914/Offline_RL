@@ -87,7 +87,7 @@ class TrainConfig:
     debug: bool = False
     alg_type: str = os.path.basename(__file__).rstrip(".py")
     logdir: str = "results"
-    dataset_path: str = os.path.expanduser("~/Offline_RL/datasets")
+    dataset_path: str = os.path.expanduser("~/Offline_RL/")
     save_model: bool = False
     debug_eval: bool = False
     # corruption
@@ -103,7 +103,8 @@ class TrainConfig:
 
     def __post_init__(self):
         # train
-        if not self.eval_only:
+        # if not self.eval_only:
+        if True:
             if self.corruption_tag == "obs":
                 self.corruption_obs = 1.0
                 self.corruption_act = 0.0
@@ -214,20 +215,20 @@ class TrainConfig:
             self.warmup_steps = int(0.1 * self.update_steps)
             self.decay_steps = int(0.1 * self.update_steps)
         # evaluation
-        if self.eval_only:
-            assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
-            self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
-            with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
-                train_config = json.load(f)
-            unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack", "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
-            for key, value in train_config.items():
-                if key not in unoverwritten_keys:
-                    try:
-                        value = eval(value)
-                    except:
-                        pass
-                    self.__dict__[key] = value
-                    # print(f"Set {key} to {value}")
+        # if self.eval_only:
+            # assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
+            # self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
+            # with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
+            #     train_config = json.load(f)
+            # unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack", "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
+            # for key, value in train_config.items():
+            #     if key not in unoverwritten_keys:
+            #         try:
+            #             value = eval(value)
+            #         except:
+            #             pass
+            #         self.__dict__[key] = value
+            #         # print(f"Set {key} to {value}")
         self.eval_attack_mode = self.corruption_mode # random, adversarial
         self.eval_attack_eps = 1
         self.eval_corruption_rate = 0.3

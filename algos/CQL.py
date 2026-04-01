@@ -2,6 +2,7 @@
 # STRONG UNDER-PERFORMANCE ON PART OF ANTMAZE TASKS. BUT IN IQL PAPER IT WORKS SOMEHOW
 # https://arxiv.org/pdf/2006.04779.pdf
 import os, sys
+
 sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -45,7 +46,7 @@ class TrainConfig:
     eval_every: int = 10
     eval_episodes: int = 10
     num_epochs: int = 1000
-    eval_final: int =100
+    eval_final: int = 100
     num_updates_on_epoch: int = 1000
     max_timesteps: int = int(1e6)  # Max time steps to run environment
     checkpoints_path: Optional[str] = None  # Save path
@@ -94,15 +95,15 @@ class TrainConfig:
     ######## others
     alg_type: str = os.path.basename(__file__).rstrip(".py")
     logdir: str = "results"
-    dataset_path: str = os.path.expanduser("~/Offline_RL/datasets")
+    dataset_path: str = os.path.expanduser("~/Offline_RL")
     sample_ratio: float = 1.0
     save_model: bool = False
     debug_eval: bool = False
     ###### corruption
     corruption_agent: str = "IQL"
-    corruption_seed: int = 0 # 2023
+    corruption_seed: int = 0  # 2023
     corruption_mode: str = ""  # random, adversarial
-    corruption_tag: str = "" # obs, act, rew
+    corruption_tag: str = ""  # obs, act, rew
     corruption_next_obs: float = 0.0  # 0 or 1
     corruption_range: float = 1.0
     corruption_rate: float = 0.3
@@ -112,7 +113,8 @@ class TrainConfig:
 
     def __post_init__(self):
         # train
-        if not self.eval_only:
+        # if not self.eval_only:
+        if True:
             if self.corruption_tag == "obs":
                 self.corruption_obs = 1.0
                 self.corruption_act = 0.0
@@ -124,7 +126,7 @@ class TrainConfig:
             if self.corruption_tag == "rew":
                 self.corruption_obs = 0.0
                 self.corruption_act = 0.0
-                self.corruption_rew = 1.0  
+                self.corruption_rew = 1.0
             if self.env.startswith("antmaze"):
                 self.num_epochs = 1000
                 self.buffer_size = 1000000
@@ -146,7 +148,7 @@ class TrainConfig:
                 self.normalize = False
                 self.normalize_reward = True
                 self.reward_scale = 10.0
-                self.reward_bias= -0.5
+                self.reward_bias = -0.5
                 self.q_n_hidden_layers = 5
                 self.use_automatic_entropy_tuning = True
             # sample ratio
@@ -170,22 +172,23 @@ class TrainConfig:
             self.warmup_steps = int(0.1 * self.update_steps)
             self.decay_steps = int(0.1 * self.update_steps)
         # evaluation
-        if self.eval_only:
-            assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
-            self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
-            with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
-                train_config = json.load(f)
-            unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack", "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
-            for key, value in train_config.items():
-                if key not in unoverwritten_keys:
-                    try:
-                        value = eval(value)
-                    except:
-                        pass
-                    self.__dict__[key] = value
-                    # print(f"Set {key} to {value}")
-            self.normalize = True
-        self.eval_attack_mode = self.corruption_mode # random, adversarial
+        # if self.eval_only:
+        #     assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
+        #     self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
+        #     with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
+        #         train_config = json.load(f)
+        #     unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack",
+        #                           "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
+        #     for key, value in train_config.items():
+        #         if key not in unoverwritten_keys:
+        #             try:
+        #                 value = eval(value)
+        #             except:
+        #                 pass
+        #             self.__dict__[key] = value
+        #             # print(f"Set {key} to {value}")
+        #     self.normalize = True
+        self.eval_attack_mode = self.corruption_mode  # random, adversarial
         self.eval_attack_eps = 1
         self.eval_corruption_rate = 0.3
         if self.eval_attack_mode == "random" and self.corruption_tag == "rew":
@@ -194,10 +197,10 @@ class TrainConfig:
 
 class ReparameterizedTanhGaussian(nn.Module):
     def __init__(
-        self,
-        log_std_min: float = -20.0,
-        log_std_max: float = 2.0,
-        no_tanh: bool = False,
+            self,
+            log_std_min: float = -20.0,
+            log_std_max: float = 2.0,
+            no_tanh: bool = False,
     ):
         super().__init__()
         self.log_std_min = log_std_min
@@ -205,7 +208,7 @@ class ReparameterizedTanhGaussian(nn.Module):
         self.no_tanh = no_tanh
 
     def log_prob(
-        self, mean: torch.Tensor, log_std: torch.Tensor, sample: torch.Tensor
+            self, mean: torch.Tensor, log_std: torch.Tensor, sample: torch.Tensor
     ) -> torch.Tensor:
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         std = torch.exp(log_std)
@@ -218,7 +221,7 @@ class ReparameterizedTanhGaussian(nn.Module):
         return torch.sum(action_distribution.log_prob(sample), dim=-1)
 
     def forward(
-        self, mean: torch.Tensor, log_std: torch.Tensor, deterministic: bool = False
+            self, mean: torch.Tensor, log_std: torch.Tensor, deterministic: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         std = torch.exp(log_std)
@@ -242,16 +245,16 @@ class ReparameterizedTanhGaussian(nn.Module):
 
 class TanhGaussianPolicy(nn.Module):
     def __init__(
-        self,
-        state_dim: int,
-        action_dim: int,
-        hidden_dim: int = 256,
-        n_hidden: int = 2,
-        max_action: float = 1.0,
-        log_std_multiplier: float = 1.0,
-        log_std_offset: float = -1.0,
-        orthogonal_init: bool = False,
-        no_tanh: bool = False,
+            self,
+            state_dim: int,
+            action_dim: int,
+            hidden_dim: int = 256,
+            n_hidden: int = 2,
+            max_action: float = 1.0,
+            log_std_multiplier: float = 1.0,
+            log_std_offset: float = -1.0,
+            orthogonal_init: bool = False,
+            no_tanh: bool = False,
     ):
         super().__init__()
         self.observation_dim = state_dim
@@ -273,7 +276,7 @@ class TanhGaussianPolicy(nn.Module):
         self.tanh_gaussian = ReparameterizedTanhGaussian(no_tanh=no_tanh)
 
     def log_prob(
-        self, observations: torch.Tensor, actions: torch.Tensor
+            self, observations: torch.Tensor, actions: torch.Tensor
     ) -> torch.Tensor:
         if actions.ndim == 3:
             observations = func.extend_and_repeat(observations, 1, actions.shape[1])
@@ -283,10 +286,10 @@ class TanhGaussianPolicy(nn.Module):
         return self.tanh_gaussian.log_prob(mean, log_std, actions)
 
     def forward(
-        self,
-        observations: torch.Tensor,
-        deterministic: bool = False,
-        repeat: bool = None,
+            self,
+            observations: torch.Tensor,
+            deterministic: bool = False,
+            repeat: bool = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if repeat is not None:
             observations = func.extend_and_repeat(observations, 1, repeat)
@@ -310,12 +313,12 @@ class TanhGaussianPolicy(nn.Module):
 
 class FullyConnectedQFunction(nn.Module):
     def __init__(
-        self,
-        observation_dim: int,
-        action_dim: int,
-        hidden_dim: int = 256,
-        n_hidden: int = 2,
-        orthogonal_init: bool = False,
+            self,
+            observation_dim: int,
+            action_dim: int,
+            hidden_dim: int = 256,
+            n_hidden: int = 2,
+            orthogonal_init: bool = False,
     ):
         super().__init__()
         self.observation_dim = observation_dim
@@ -331,7 +334,7 @@ class FullyConnectedQFunction(nn.Module):
             func.init_module_weights(self.network[-1], False)
 
     def forward(
-        self, observations: torch.Tensor, actions: torch.Tensor
+            self, observations: torch.Tensor, actions: torch.Tensor
     ) -> torch.Tensor:
         multiple_actions = False
         batch_size = observations.shape[0]
@@ -350,12 +353,12 @@ class FullyConnectedQFunction(nn.Module):
 
 class CriticFunctions(nn.Module):
     def __init__(
-        self,
-        observation_dim: int,
-        action_dim: int,
-        hidden_dim: int = 256,
-        n_hidden: int = 2,
-        orthogonal_init: bool = False,
+            self,
+            observation_dim: int,
+            action_dim: int,
+            hidden_dim: int = 256,
+            n_hidden: int = 2,
+            orthogonal_init: bool = False,
     ):
         super().__init__()
         self.critic_1 = FullyConnectedQFunction(
@@ -366,7 +369,7 @@ class CriticFunctions(nn.Module):
         )
 
     def forward(
-        self, state: torch.Tensor, action: torch.Tensor
+            self, state: torch.Tensor, action: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         q1 = self.critic_1(state, action)
         q2 = self.critic_2(state, action)
@@ -375,33 +378,33 @@ class CriticFunctions(nn.Module):
 
 class ContinuousCQL:
     def __init__(
-        self,
-        critic_1,
-        critic_1_optimizer,
-        critic_2,
-        critic_2_optimizer,
-        actor,
-        actor_optimizer,
-        target_entropy: float,
-        discount: float = 0.99,
-        alpha_multiplier: float = 1.0,
-        use_automatic_entropy_tuning: bool = True,
-        backup_entropy: bool = False,
-        policy_lr: bool = 3e-4,
-        qf_lr: bool = 3e-4,
-        soft_target_update_rate: float = 5e-3,
-        bc_steps=100000,
-        target_update_period: int = 1,
-        cql_n_actions: int = 10,
-        cql_importance_sample: bool = True,
-        cql_lagrange: bool = False,
-        cql_target_action_gap: float = -1.0,
-        cql_temp: float = 1.0,
-        cql_min_q_weight: float = 5.0,
-        cql_max_target_backup: bool = False,
-        cql_clip_diff_min: float = -np.inf,
-        cql_clip_diff_max: float = np.inf,
-        device: str = "cpu",
+            self,
+            critic_1,
+            critic_1_optimizer,
+            critic_2,
+            critic_2_optimizer,
+            actor,
+            actor_optimizer,
+            target_entropy: float,
+            discount: float = 0.99,
+            alpha_multiplier: float = 1.0,
+            use_automatic_entropy_tuning: bool = True,
+            backup_entropy: bool = False,
+            policy_lr: bool = 3e-4,
+            qf_lr: bool = 3e-4,
+            soft_target_update_rate: float = 5e-3,
+            bc_steps=100000,
+            target_update_period: int = 1,
+            cql_n_actions: int = 10,
+            cql_importance_sample: bool = True,
+            cql_lagrange: bool = False,
+            cql_target_action_gap: float = -1.0,
+            cql_temp: float = 1.0,
+            cql_min_q_weight: float = 5.0,
+            cql_max_target_backup: bool = False,
+            cql_clip_diff_min: float = -np.inf,
+            cql_clip_diff_max: float = np.inf,
+            device: str = "cpu",
     ):
         super().__init__()
 
@@ -464,7 +467,7 @@ class ContinuousCQL:
     def _alpha_and_alpha_loss(self, observations: torch.Tensor, log_pi: torch.Tensor):
         if self.use_automatic_entropy_tuning:
             alpha_loss = -(
-                self.log_alpha() * (log_pi + self.target_entropy).detach()
+                    self.log_alpha() * (log_pi + self.target_entropy).detach()
             ).mean()
             alpha = self.log_alpha().exp() * self.alpha_multiplier
         else:
@@ -473,12 +476,12 @@ class ContinuousCQL:
         return alpha, alpha_loss
 
     def _policy_loss(
-        self,
-        observations: torch.Tensor,
-        actions: torch.Tensor,
-        new_actions: torch.Tensor,
-        alpha: torch.Tensor,
-        log_pi: torch.Tensor,
+            self,
+            observations: torch.Tensor,
+            actions: torch.Tensor,
+            new_actions: torch.Tensor,
+            alpha: torch.Tensor,
+            log_pi: torch.Tensor,
     ) -> torch.Tensor:
         if self.total_it <= self.bc_steps:
             log_probs = self.actor.log_prob(observations, actions)
@@ -492,7 +495,7 @@ class ContinuousCQL:
         return policy_loss
 
     def _q_loss(
-        self, observations, actions, next_observations, rewards, dones, alpha, log_dict
+            self, observations, actions, next_observations, rewards, dones, alpha, log_dict
     ):
         q1_predicted = self.critic_1(observations, actions)
         q2_predicted = self.critic_2(observations, actions)
@@ -577,7 +580,7 @@ class ContinuousCQL:
         cql_std_q2 = torch.std(cql_cat_q2, dim=1)
 
         if self.cql_importance_sample:
-            random_density = np.log(0.5**action_dim)
+            random_density = np.log(0.5 ** action_dim)
             cql_cat_q1 = torch.cat(
                 [
                     cql_q1_rand - random_density,
@@ -615,14 +618,14 @@ class ContinuousCQL:
                 torch.exp(self.log_alpha_prime()), min=0.0, max=1000000.0
             )
             cql_min_qf1_loss = (
-                alpha_prime  # noqa
-                * self.cql_min_q_weight  # noqa
-                * (cql_qf1_diff - self.cql_target_action_gap)  # noqa
+                    alpha_prime  # noqa
+                    * self.cql_min_q_weight  # noqa
+                    * (cql_qf1_diff - self.cql_target_action_gap)  # noqa
             )
             cql_min_qf2_loss = (
-                alpha_prime  # noqa
-                * self.cql_min_q_weight  # noqa
-                * (cql_qf2_diff - self.cql_target_action_gap)  # noqa
+                    alpha_prime  # noqa
+                    * self.cql_min_q_weight  # noqa
+                    * (cql_qf2_diff - self.cql_target_action_gap)  # noqa
             )
 
             self.alpha_prime_optimizer.zero_grad()
@@ -882,7 +885,7 @@ def train(config: TrainConfig, logger: Logger):
         actor = trainer.actor
 
     if config.eval_attack:
-        state_std, act_std, rew_std, rew_min= func.get_state_std(config)
+        state_std, act_std, rew_std, rew_min = func.get_state_std(config)
         eval_attacker = Evaluation_Attacker(
             config, config.env, config.corruption_agent, config.eval_attack_eps,
             state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
@@ -892,14 +895,14 @@ def train(config: TrainConfig, logger: Logger):
     else:
         eval_attacker = None
         print("eval_attack: False")
-    
+
     if config.debug_eval:
         eval_log = func.eval(config, env, actor, eval_attacker)
         logger.record("epoch", 0)
         for k, v in eval_log.items():
             logger.record(k, v)
         logger.dump(0)
-    
+
     # if config.use_wandb:
     #     wandb.log({"epoch": 0, **eval_log})
 
@@ -940,11 +943,11 @@ def train(config: TrainConfig, logger: Logger):
 
             now_score = eval_log["eval/normalized_score_mean"]
             with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
-                    f.write(f"{now_score:.4f}_{epoch}\n")
+                f.write(f"{now_score:.4f}_{epoch}\n")
             if now_score > best_score:
                 best_score = now_score
                 with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
-                        f.write(f"{best_score:.4f}_{epoch}")
+                    f.write(f"{best_score:.4f}_{epoch}")
                 if config.save_model:
                     torch.save(
                         trainer.state_dict(),
@@ -954,7 +957,7 @@ def train(config: TrainConfig, logger: Logger):
                 if now_score > best_score_50:
                     best_score_50 = now_score
                     with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
-                            f.write(f"{best_score_50:.4f}_{epoch}")
+                        f.write(f"{best_score_50:.4f}_{epoch}")
                     if config.save_model:
                         torch.save(
                             trainer.state_dict(),
@@ -962,7 +965,7 @@ def train(config: TrainConfig, logger: Logger):
                         )
             if epoch == config.num_epochs:
                 with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
-                        f.write(f"{now_score:.4f}_{epoch}")
+                    f.write(f"{now_score:.4f}_{epoch}")
                 if config.save_model:
                     torch.save(
                         trainer.state_dict(),
@@ -983,7 +986,7 @@ def test(config: TrainConfig, logger: Logger):
     max_action = float(env.action_space.high[0])
 
     if config.sample_ratio < 1.0:
-        dataset_path = os.path.join(config.dataset_path, "original", f"{config.env}_ratio_{config.sample_ratio}.pt")
+        dataset_path = os.path.join(config.dataset_path, "datasets", f"{config.env}_ratio_{config.sample_ratio}.pt")
         dataset = torch.load(dataset_path)
     else:
         h5path = (
@@ -1013,34 +1016,44 @@ def test(config: TrainConfig, logger: Logger):
         max_action,
         orthogonal_init=config.orthogonal_init,
     ).to(config.device)
-    actor.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, "1000.pt"))["actor"])
-    actor.eval()
-    # logger.info(f"Actor Network: \n{str(actor)}")
+    all_files = os.listdir(config.checkpoint_dir)
+    model_epoches = [
+        f for f in all_files
+        if f.startswith("policy") and f.endswith(".pth")
+    ]
+    model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
+    for i, model_epoch in enumerate(model_epoches):
+        epoch = int(model_epoch.split(".")[0].split("_")[1])
+        print(f"eval epoch: {epoch}")
+        actor.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch))["actor"])
+        actor.eval()
+        # logger.info(f"Actor Network: \n{str(actor)}")
 
-    if config.eval_attack:
-        state_std, act_std, rew_std, rew_min = func.get_state_std(config)
-        eval_attacker = Evaluation_Attacker(
-            config, config.env, config.corruption_agent, config.eval_attack_eps,
-            state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
-            MODEL_PATH[config.corruption_agent],
-        )
-        print("eval_attack: True")
-    else:
-        eval_attacker = None
-        print("eval_attack: False")
-    
-    eval_log = func.eval(config, env, actor, eval_attacker)
-    for k, v in eval_log.items():
-        logger.record(k, v)
-    logger.dump(0)
+        if config.eval_attack:
+            state_std, act_std, rew_std, rew_min = func.get_state_std(config)
+            eval_attacker = Evaluation_Attacker(
+                config, config.env, config.corruption_agent, config.eval_attack_eps,
+                state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
+                MODEL_PATH[config.corruption_agent],
+            )
+            print("eval_attack: True")
+        else:
+            eval_attacker = None
+            print("eval_attack: False")
 
-    score = eval_log[f"eval/normalized_score_mean"]
-    eval_atta_tag = "attack" if config.eval_attack else "clean"
-    # train_time = config.checkpoint_dir.split("_")[-2]
-    log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(logger.get_dir()))), f"test_{config.group}_{config.corruption_mode}_{eval_atta_tag}_{config.test_time}.txt")
-    title = f"{config.group}_{config.env}_{config.corruption_mode}_{config.corruption_tag}_{eval_atta_tag}_{config.seed}"
-    with open(log_path, "a") as f:
-        f.write(f"{title}: {score:.4f}\n")
+        eval_log = func.eval(config, env, actor, eval_attacker)
+        for k, v in eval_log.items():
+            logger.record(k, v)
+        logger.dump(0)
+
+        score = eval_log[f"eval/normalized_score_mean"]
+        eval_atta_tag = "attack" if config.eval_attack else "clean"
+        # train_time = config.checkpoint_dir.split("_")[-2]
+        log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(logger.get_dir()))),
+                                f"test_{config.group}_{config.env}_{config.corruption_mode}_{eval_atta_tag}_{model_epoch}_{config.test_time}.txt")
+        title = f"{config.group}_{config.env}_{config.corruption_mode}_{config.corruption_tag}_{eval_atta_tag}_{config.seed}"
+        with open(log_path, "a") as f:
+            f.write(f"{title}: {score:.4f}\n")
 
 
 @pyrallis.wrap()
