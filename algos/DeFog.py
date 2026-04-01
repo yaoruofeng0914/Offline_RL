@@ -920,7 +920,7 @@ def test(config: TrainConfig, logger: Logger):
             eval_attacker = None
             print("eval_attack: False")
 
-        eval_log = func.eval(config, env, model, eval_attacker)
+        eval_log = eval_fn(config, env, model, eval_attacker)
         for k, v in eval_log.items():
             logger.record(k, v)
         logger.dump(0)

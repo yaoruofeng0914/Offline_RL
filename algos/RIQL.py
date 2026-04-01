@@ -19,7 +19,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import utils.functions as func
-import utils.dt_functions as dt_func
 
 from torch.distributions import MultivariateNormal
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -48,23 +47,10 @@ class TrainConfig:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     num_epochs: int = 1000
     eval_final: int =100
-    reward_scale: float = 0.001
     num_updates_on_epoch: int = 1000
     # model params
     n_hidden: int = 2
     hidden_dim: int = 256
-    seq_len: int = 20
-    embedding_dim: int = 128
-    num_layers: int = 3
-    num_heads: int = 1
-    episode_len: int = 1000
-    attention_dropout: float = 0.0
-    residual_dropout: float = 0.1
-    embedding_dropout: float = None
-    mlp_embedding: bool = False
-    mlp_head: bool = False
-    mlp_reward: bool = True
-    embed_order: str = "rsa"
     actor_dropout: Optional[float] = None  # Adroit uses dropout for policy network
     # IQL
     buffer_size: int = 2_000_000  # Replay buffer size
@@ -98,7 +84,7 @@ class TrainConfig:
     ######## others
     alg_type: str = os.path.basename(__file__).rstrip(".py")
     logdir: str = "results"
-    dataset_path: str = os.path.expanduser("~/Offline_RL/datasets")
+    dataset_path: str = os.path.expanduser("~/Offline_RL/")
     save_model: bool = False
     debug_eval: bool = False
     ###### corruption
@@ -115,7 +101,8 @@ class TrainConfig:
 
     def __post_init__(self):
         # train
-        if not self.eval_only:
+        # if not self.eval_only:
+        if True:
             if self.corruption_tag == "obs":
                 self.corruption_obs = 1.0
                 self.corruption_act = 0.0
@@ -239,19 +226,19 @@ class TrainConfig:
             self.decay_steps = int(0.1 * self.update_steps)
         # evaluation
         # if self.eval_only:
-            # assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
-            # self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
-            # with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
-            #     train_config = json.load(f)
-            # unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack", "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
-            # for key, value in train_config.items():
-            #     if key not in unoverwritten_keys:
-            #         try:
-            #             value = eval(value)
-            #         except:
-            #             pass
-            #         self.__dict__[key] = value
-            #         # print(f"Set {key} to {value}")
+        #     assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
+        #     self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
+        #     with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
+        #         train_config = json.load(f)
+        #     unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack", "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
+        #     for key, value in train_config.items():
+        #         if key not in unoverwritten_keys:
+        #             try:
+        #                 value = eval(value)
+        #             except:
+        #                 pass
+        #             self.__dict__[key] = value
+        #             # print(f"Set {key} to {value}")
         self.eval_attack_mode = self.corruption_mode # random, adversarial
         self.eval_attack_eps = 1
         self.eval_corruption_rate = 0.3
@@ -1007,10 +994,12 @@ def test(config: TrainConfig, logger: Logger):
     action_dim = env.action_space.shape[0]
     max_action = float(env.action_space.high[0])
 
-    # data & dataloader setup
-    dataset = dt_func.SequenceDataset(config, logger)
-    logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
-    # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
+    if config.sample_ratio < 1.0:
+        dataset_path = os.path.join(config.dataset_path, "datasets", f"{config.env}_ratio_{config.sample_ratio}.pt")
+        dataset = torch.load(dataset_path)
+    else:
+        h5path = os.path.join(config.dataset_path, "original", f"{config.env}.hdf5")
+        dataset = env.get_dataset(h5path=h5path)
 
     ##### corrupt
     attack_indexes = np.zeros(dataset["rewards"].shape)
@@ -1048,35 +1037,45 @@ def test(config: TrainConfig, logger: Logger):
     actor = DeterministicPolicy(
         state_dim, action_dim, max_action, config.hidden_dim, config.n_hidden, config.actor_dropout
     ).to(config.device)
-    actor.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, "final_policy.pth"))["actor"])
-    actor.eval()
-    # logger.info(f"Actor Network: \n{str(actor)}")
 
-    if config.eval_attack:
-                state_std, act_std, rew_std, rew_min = func.get_state_std(config)
-                eval_attacker = Evaluation_Attacker(
-                    config, config.env, config.corruption_agent, config.eval_attack_eps,
-                    state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
-                    MODEL_PATH[config.corruption_agent],
-                )
-                print("eval_attack: True")
-    else:
-        eval_attacker = None
-        print("eval_attack: False")
+    all_files = os.listdir(config.checkpoint_dir)
+    model_epoches = [
+        f for f in all_files
+        if f.startswith("policy") and f.endswith(".pth")
+    ]
+    model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
+    for i, model_epoch in enumerate(model_epoches):
+        epoch = int(model_epoch.split(".")[0].split("_")[1])
+        print(f"eval epoch: {epoch}")
+        actor.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch))["actor"])
+        actor.eval()
+        # logger.info(f"Actor Network: \n{str(actor)}")
 
-    eval_log = func.eval(config, env, actor, eval_attacker)
-    for k, v in eval_log.items():
-        logger.record(k, v)
-    logger.dump(0)
+        if config.eval_attack:
+            state_std, act_std, rew_std, rew_min = func.get_state_std(config)
+            eval_attacker = Evaluation_Attacker(
+                config, config.env, config.corruption_agent, config.eval_attack_eps,
+                state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
+                MODEL_PATH[config.corruption_agent],
+            )
+            print("eval_attack: True")
+        else:
+            eval_attacker = None
+            print("eval_attack: False")
 
-    score = eval_log[f"eval/normalized_score_mean"]
-    eval_atta_tag = "attack" if config.eval_attack else "clean"
-    # train_time = config.checkpoint_dir.split("_")[-2]
-    log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(logger.get_dir()))), f"test_{config.group}_{config.corruption_mode}_{eval_atta_tag}_{config.test_time}.txt")
-    title = f"{config.group}_{config.env}_{config.corruption_mode}_{config.corruption_tag}_{eval_atta_tag}_{config.seed}"
-    with open(log_path, "a") as f:
-        f.write(f"{title}: {score:.4f}\n")
+        eval_log = func.eval(config, env, actor, eval_attacker)
+        for k, v in eval_log.items():
+            logger.record(k, v)
+        logger.dump(0)
 
+        score = eval_log[f"eval/normalized_score_mean"]
+        eval_atta_tag = "attack" if config.eval_attack else "clean"
+        # train_time = config.checkpoint_dir.split("_")[-2]
+        log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(logger.get_dir()))),
+                                f"test_{config.group}_{config.env}_{config.corruption_mode}_{eval_atta_tag}_{model_epoch}_{config.test_time}.txt")
+        title = f"{config.group}_{config.env}_{config.corruption_mode}_{config.corruption_tag}_{eval_atta_tag}_{config.seed}"
+        with open(log_path, "a") as f:
+            f.write(f"{title}: {score:.4f}\n")
 
 @pyrallis.wrap()
 def main(config: TrainConfig):

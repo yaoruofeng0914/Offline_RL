@@ -1,6 +1,7 @@
 # source: https://github.com/gwthomas/IQL-PyTorch
 # https://arxiv.org/pdf/2110.06169.pdf
 import os, sys
+
 sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from typing import Any, Dict, List, Optional
@@ -17,7 +18,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import utils.functions as func
-import utils.dt_functions as dt_func
 
 from torch.distributions import MultivariateNormal
 from dataclasses import dataclass
@@ -47,8 +47,7 @@ class TrainConfig:
     eval_episodes: int = 10
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     num_epochs: int = 1000
-    eval_final: int =100
-    reward_scale: float = 0.001
+    eval_final: int = 100
     num_updates_on_epoch: int = 1000
     max_timesteps: int = int(1e6)  # Max time steps to run environment
     checkpoints_path: Optional[str] = None  # Save path
@@ -56,18 +55,6 @@ class TrainConfig:
     # model params
     n_hidden: int = 2
     hidden_dim: int = 256
-    seq_len: int = 20
-    embedding_dim: int = 128
-    num_layers: int = 3
-    num_heads: int = 1
-    episode_len: int = 1000
-    attention_dropout: float = 0.0
-    residual_dropout: float = 0.1
-    embedding_dropout: float = None
-    mlp_embedding: bool = False
-    mlp_head: bool = False
-    mlp_reward: bool = True
-    embed_order: str = "rsa"
     # IQL
     buffer_size: int = 2_000_000  # Replay buffer size
     batch_size: int = 256  # Batch size for all networks
@@ -89,7 +76,7 @@ class TrainConfig:
     # others
     alg_type: str = os.path.basename(__file__).rstrip(".py")
     logdir: str = "results"
-    dataset_path: str = os.path.expanduser("~/Offline_RL/datasets")
+    dataset_path: str = os.path.expanduser("~/Offline_RL/")
     sample_ratio: float = 1.0
     save_model: bool = False
     debug_eval: bool = False
@@ -98,9 +85,9 @@ class TrainConfig:
     threshold: float = 1.0
     # corruption
     corruption_agent: str = "IQL"
-    corruption_seed: int = 0 # 2023
+    corruption_seed: int = 0  # 2023
     corruption_mode: str = ""  # random, adversarial
-    corruption_tag: str = "" # obs, act, rew
+    corruption_tag: str = ""  # obs, act, rew
     corruption_next_obs: float = 0.0  # 0 or 1
     corruption_range: float = 1.0
     corruption_rate: float = 0.3
@@ -110,7 +97,8 @@ class TrainConfig:
 
     def __post_init__(self):
         # train
-        if not self.eval_only:
+        # if not self.eval_only:
+        if True:
             if self.corruption_tag == "obs":
                 self.corruption_obs = 1.0
                 self.corruption_act = 0.0
@@ -122,7 +110,7 @@ class TrainConfig:
             if self.corruption_tag == "rew":
                 self.corruption_obs = 0.0
                 self.corruption_act = 0.0
-                self.corruption_rew = 1.0  
+                self.corruption_rew = 1.0
             if self.env == "halfcheetah-medium-v2":
                 if self.corruption_obs:
                     self.threshold = 0.6
@@ -191,7 +179,7 @@ class TrainConfig:
                         self.wmse_coef = 0.1
                     if self.corruption_rew > 0.0 and self.corruption_obs > 0.0 and self.corruption_act > 0.0:
                         self.wmse_coef = 0.1
-            
+
             if self.corruption_mode == "random" and self.corruption_rew > 0.0:
                 self.corruption_rew *= 30
             # auto set
@@ -200,20 +188,21 @@ class TrainConfig:
             self.decay_steps = int(0.1 * self.update_steps)
         # evaluation
         # if self.eval_only:
-            # assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
-            # self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
-            # with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
-            #     train_config = json.load(f)
-            # unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack", "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
-            # for key, value in train_config.items():
-            #     if key not in unoverwritten_keys:
-            #         try:
-            #             value = eval(value)
-            #         except:
-            #             pass
-            #         self.__dict__[key] = value
-            #         # print(f"Set {key} to {value}")
-        self.eval_attack_mode = self.corruption_mode # random, adversarial
+        #     assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
+        #     self.checkpoint_dir = os.path.join(self.logdir, self.group, self.env, self.checkpoint_dir)
+        #     with open(os.path.join(self.checkpoint_dir, "params.json"), "r") as f:
+        #         train_config = json.load(f)
+        #     unoverwritten_keys = ["eval_id", "test_time", "group", "checkpoint_dir", "eval_only", "eval_attack",
+        #                           "eval_attack_mode", "eval_attack_eps", "eval_corruption_rate"]
+        #     for key, value in train_config.items():
+        #         if key not in unoverwritten_keys:
+        #             try:
+        #                 value = eval(value)
+        #             except:
+        #                 pass
+        #             self.__dict__[key] = value
+                    # print(f"Set {key} to {value}")
+        self.eval_attack_mode = self.corruption_mode  # random, adversarial
         self.eval_attack_eps = 1
         self.eval_corruption_rate = 0.3
         if self.eval_attack_mode == "random" and self.corruption_tag == "rew":
@@ -222,12 +211,12 @@ class TrainConfig:
 
 class GaussianPolicy(nn.Module):
     def __init__(
-        self,
-        state_dim: int,
-        act_dim: int,
-        max_action: float,
-        hidden_dim: int = 256,
-        n_hidden: int = 2,
+            self,
+            state_dim: int,
+            act_dim: int,
+            max_action: float,
+            hidden_dim: int = 256,
+            n_hidden: int = 2,
     ):
         super().__init__()
         self.net = MLP([state_dim, *([hidden_dim] * n_hidden), act_dim])
@@ -262,12 +251,12 @@ class GaussianPolicy(nn.Module):
 
 class DeterministicPolicy(nn.Module):
     def __init__(
-        self,
-        state_dim: int,
-        act_dim: int,
-        max_action: float,
-        hidden_dim: int = 256,
-        n_hidden: int = 2,
+            self,
+            state_dim: int,
+            act_dim: int,
+            max_action: float,
+            hidden_dim: int = 256,
+            n_hidden: int = 2,
     ):
         super().__init__()
         self.net = MLP(
@@ -294,12 +283,12 @@ class DeterministicPolicy(nn.Module):
 
 class BCLearning:
     def __init__(
-        self,
-        max_action: float,
-        actor: nn.Module,
-        actor_optimizer: torch.optim.Optimizer,
-        wmse_coef: float = 1.0,
-        device: str = "cpu",
+            self,
+            max_action: float,
+            actor: nn.Module,
+            actor_optimizer: torch.optim.Optimizer,
+            wmse_coef: float = 1.0,
+            device: str = "cpu",
     ):
         self.max_action = max_action
         self.wmse_coef = wmse_coef
@@ -431,13 +420,13 @@ def train(config: TrainConfig, logger: Logger):
         actor = trainer.actor
 
     if config.eval_attack:
-            state_std, act_std, rew_std, rew_min = func.get_state_std(config)
-            eval_attacker = Evaluation_Attacker(
-                config, config.env, config.corruption_agent, config.eval_attack_eps,
-                state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
-                MODEL_PATH[config.corruption_agent],
-            )
-            print("eval_attack: True")
+        state_std, act_std, rew_std, rew_min = func.get_state_std(config)
+        eval_attacker = Evaluation_Attacker(
+            config, config.env, config.corruption_agent, config.eval_attack_eps,
+            state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
+            MODEL_PATH[config.corruption_agent],
+        )
+        print("eval_attack: True")
     else:
         eval_attacker = None
         print("eval_attack: False")
@@ -448,7 +437,7 @@ def train(config: TrainConfig, logger: Logger):
         for k, v in eval_log.items():
             logger.record(k, v)
         logger.dump(0)
-    
+
     # if config.use_wandb:
     #     wandb.log({"epoch": 0, **eval_log})
 
@@ -489,11 +478,11 @@ def train(config: TrainConfig, logger: Logger):
 
             now_score = eval_log["eval/normalized_score_mean"]
             with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
-                    f.write(f"{now_score:.4f}_{epoch}\n")
+                f.write(f"{now_score:.4f}_{epoch}\n")
             if now_score > best_score:
                 best_score = now_score
                 with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
-                        f.write(f"{best_score:.4f}_{epoch}")
+                    f.write(f"{best_score:.4f}_{epoch}")
                 if config.save_model:
                     torch.save(
                         trainer.state_dict(),
@@ -503,7 +492,7 @@ def train(config: TrainConfig, logger: Logger):
                 if now_score > best_score_50:
                     best_score_50 = now_score
                     with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
-                            f.write(f"{best_score_50:.4f}_{epoch}")
+                        f.write(f"{best_score_50:.4f}_{epoch}")
                     if config.save_model:
                         torch.save(
                             trainer.state_dict(),
@@ -511,7 +500,7 @@ def train(config: TrainConfig, logger: Logger):
                         )
             if epoch == config.num_epochs:
                 with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
-                        f.write(f"{now_score:.4f}_{epoch}")
+                    f.write(f"{now_score:.4f}_{epoch}")
                 if config.save_model:
                     torch.save(
                         trainer.state_dict(),
@@ -533,10 +522,12 @@ def test(config: TrainConfig, logger: Logger):
     action_dim = env.action_space.shape[0]
     max_action = float(env.action_space.high[0])
 
-    # data & dataloader setup
-    dataset = dt_func.SequenceDataset(config, logger)
-    logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
-    # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
+    if config.sample_ratio < 1.0:
+        dataset_path = os.path.join(config.dataset_path, "datasets", f"{config.env}_ratio_{config.sample_ratio}.pt")
+        dataset = torch.load(dataset_path)
+    else:
+        h5path = os.path.join(config.dataset_path, "original", f"{config.env}.hdf5")
+        dataset = env.get_dataset(h5path=h5path)
 
     ##### corrupt
     if config.corruption_mode != "none":
@@ -556,35 +547,44 @@ def test(config: TrainConfig, logger: Logger):
             state_dim, action_dim, max_action, config.hidden_dim, config.n_hidden
         )
     ).to(config.device)
-    actor.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, "final_policy.pth"))["actor"])
-    actor.eval()
-    # logger.info(f"Actor Network: \n{str(actor)}")
+    all_files = os.listdir(config.checkpoint_dir)
+    model_epoches = [
+        f for f in all_files
+        if f.startswith("policy") and f.endswith(".pth")
+    ]
+    model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
+    for i, model_epoch in enumerate(model_epoches):
+        epoch = int(model_epoch.split(".")[0].split("_")[1])
+        print(f"eval epoch: {epoch}")
+        actor.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch))["actor"])
+        actor.eval()
+        # logger.info(f"Actor Network: \n{str(actor)}")
 
-    if config.eval_attack:
-                state_std, act_std, rew_std, rew_min = func.get_state_std(config)
-                eval_attacker = Evaluation_Attacker(
-                    config, config.env, config.corruption_agent, config.eval_attack_eps,
-                    state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
-                    MODEL_PATH[config.corruption_agent],
-                )
-                print("eval_attack: True")
-    else:
-        eval_attacker = None
-        print("eval_attack: False")
+        if config.eval_attack:
+            state_std, act_std, rew_std, rew_min = func.get_state_std(config)
+            eval_attacker = Evaluation_Attacker(
+                config, config.env, config.corruption_agent, config.eval_attack_eps,
+                state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
+                MODEL_PATH[config.corruption_agent],
+            )
+            print("eval_attack: True")
+        else:
+            eval_attacker = None
+            print("eval_attack: False")
 
-    eval_log = func.eval(config, env, actor, eval_attacker)
-    for k, v in eval_log.items():
-        logger.record(k, v)
-    logger.dump(0)
+        eval_log = func.eval(config, env, actor, eval_attacker)
+        for k, v in eval_log.items():
+            logger.record(k, v)
+        logger.dump(0)
 
-    score = eval_log[f"eval/normalized_score_mean"]
-    eval_atta_tag = "attack" if config.eval_attack else "clean"
-    # train_time = config.checkpoint_dir.split("_")[-2]
-    log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(logger.get_dir()))), f"test_{config.group}_{config.corruption_mode}_{eval_atta_tag}_{config.test_time}.txt")
-    title = f"{config.group}_{config.env}_{config.corruption_mode}_{config.corruption_tag}_{eval_atta_tag}_{config.seed}"
-    with open(log_path, "a") as f:
-        f.write(f"{title}: {score:.4f}\n")
-
+        score = eval_log[f"eval/normalized_score_mean"]
+        eval_atta_tag = "attack" if config.eval_attack else "clean"
+        # train_time = config.checkpoint_dir.split("_")[-2]
+        log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(logger.get_dir()))),
+                                f"test_{config.group}_{config.env}_{config.corruption_mode}_{eval_atta_tag}_{model_epoch}_{config.test_time}.txt")
+        title = f"{config.group}_{config.env}_{config.corruption_mode}_{config.corruption_tag}_{eval_atta_tag}_{config.seed}"
+        with open(log_path, "a") as f:
+            f.write(f"{title}: {score:.4f}\n")
 
 @pyrallis.wrap()
 def main(config: TrainConfig):

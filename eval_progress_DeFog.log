@@ -13,10 +13,10 @@ Attack name: _ratio_0.01_act_1.0_0.3
   new_dataset = torch.load(dataset_path)
 
 Processing trajectories:   0%|          | 0/10000 [00:00<?, ?it/s]
-Processing trajectories: 100%|██████████| 10000/10000 [00:00<00:00, 388056.07it/s]Dataset: 50 trajectories
+Processing trajectories: 100%|██████████| 10000/10000 [00:00<00:00, 365612.27it/s]Dataset: 50 trajectories
 
 /home/user/Offline_RL/algos/DeFog.py:907: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
-  model.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch)))
+  model.load_state_dict(torch.load(os.path.join(config.ch.,eckpoint_dir, model_epoch)))
 /home/user/Offline_RL/utils/functions.py:287: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
   dataset = torch.load(dataset_path)
 /home/user/Offline_RL/utils/attack.py:170: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
@@ -24,22 +24,48 @@ Processing trajectories: 100%|██████████| 10000/10000 [00:00
 eval epoch: 10
 eval_attack: True
 
-  0%|          | 0/10 [00:00<?, ?it/s]
-  0%|          | 0/10 [00:00<?, ?it/s]
+Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]
+Evaluation:  10%|█         | 1/10 [00:00<00:04,  2.05it/s]
+Evaluation:  20%|██        | 2/10 [00:00<00:02,  2.71it/s]
+Evaluation:  30%|███       | 3/10 [00:01<00:02,  3.01it/s]
+Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.19it/s]
+Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.30it/s]
+Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.37it/s]
+Evaluation:  70%|███████   | 7/10 [00:02<00:00,  3.43it/s]
+Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.47it/s]
+Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.47it/s]
+Evaluation: 100%|██████████| 10/10 [00:03<00:00,  3.49it/s]
+                                                           
+
+Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]
+Evaluation:  10%|█         | 1/10 [00:00<00:02,  3.49it/s]
+Evaluation:  20%|██        | 2/10 [00:00<00:02,  3.55it/s]
+Evaluation:  30%|███       | 3/10 [00:00<00:01,  3.50it/s]
+Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.52it/s]
+Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.53it/s]
+Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.54it/s]
+Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.55it/s]
+Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.54it/s]
+Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.52it/s]
+Evaluation: 100%|██████████| 10/10 [00:02<00:00,  3.52it/s]
+                                                           -----------------------------------------------
+| eval/                         |             |
+|    1450_normalized_score_mean | 9.59318e-05 |
+|    1450_normalized_score_std  | 0.0135137   |
+|    1450_reward_mean           | -56.51      |
+|    1450_reward_std            | 0.39691     |
+|    2900_normalized_score_mean | -0.00119695 |
+|    2900_normalized_score_std  | 0.0222037   |
+|    2900_reward_mean           | -56.548     |
+|    2900_reward_std            | 0.652142    |
+-----------------------------------------------
+
 Traceback (most recent call last):
   File "/home/user/Offline_RL/algos/DeFog.py", line 943, in main
     test(config, logger)
-  File "/home/user/Offline_RL/algos/DeFog.py", line 923, in test
-    eval_log = func.eval(config, env, model, eval_attacker)
-  File "/home/user/Offline_RL/utils/functions.py", line 148, in eval
-    eval_scores = eval_actor(
-  File "/home/user/miniconda3/envs/offline_rl/lib/python3.8/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
-    return func(*args, **kwargs)
-  File "/home/user/Offline_RL/utils/functions.py", line 119, in eval_actor
-    action = actor.act(state, device)
-  File "/home/user/miniconda3/envs/offline_rl/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1729, in __getattr__
-    raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
-AttributeError: 'DecisionTransformer' object has no attribute 'act'
+  File "/home/user/Offline_RL/algos/DeFog.py", line 928, in test
+    score = eval_log[f"eval/normalized_score_mean"]
+KeyError: 'eval/normalized_score_mean'
 
 
-pybullet build time: May 20 2022 19:44:1
+pybullet build time: May 20 2022 19:44:17

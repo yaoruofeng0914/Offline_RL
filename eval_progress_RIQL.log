@@ -1,0 +1,72 @@
+pybullet build time: May 20 2022 19:44:17
+Logging to /home/user/Offline_RL/checkpoint4baseline/RIQL/door-expert-v0/RIQL_door-expert-v0_adv_act_0_20260213072748_4717d657-98fb-4ffc-a9a3-f0cf5293b5f3/eval_attack
+Load new dataset from /home/user/Offline_RL/log_attack_data/door-expert-v0/IQL_adversarial_ratio_0.01_act_1.0_0.3.pth
+adversarial actions
+Attack name: _ratio_0.01_act_1.0_0.3
+/home/user/Offline_RL/src/d4rl/d4rl/hand_manipulation_suite/door_v0.py:13: UserWarning: [33mThis environment is deprecated. Please use the most recent version of this environment.[0m
+  offline_env.OfflineEnv.__init__(self, **kwargs)
+/home/user/miniconda3/envs/offline_rl/lib/python3.8/site-packages/gym/logger.py:34: UserWarning: [33mWARN: Box bound precision lowered by casting to float32[0m
+  warnings.warn(colorize("%s: %s" % ("WARN", msg % args), "yellow"))
+/home/user/Offline_RL/algos/RIQL.py:999: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  dataset = torch.load(dataset_path)
+/home/user/Offline_RL/utils/attack.py:449: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  new_dataset = torch.load(dataset_path)
+/home/user/Offline_RL/algos/RIQL.py:1050: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  actor.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch))["actor"])
+/home/user/Offline_RL/utils/functions.py:287: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  dataset = torch.load(dataset_path)
+/home/user/Offline_RL/utils/attack.py:170: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  state_dict = torch.load(model_path, map_location=ptu.device)
+eval epoch: 910
+eval_attack: True
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:01,  5.91it/s] 20%|██        | 2/10 [00:00<00:01,  7.44it/s] 40%|████      | 4/10 [00:00<00:00,  8.86it/s] 50%|█████     | 5/10 [00:00<00:00,  9.12it/s] 60%|██████    | 6/10 [00:00<00:00,  9.29it/s] 80%|████████  | 8/10 [00:00<00:00,  9.56it/s] 90%|█████████ | 9/10 [00:00<00:00,  9.56it/s]100%|██████████| 10/10 [00:01<00:00,  9.45it/s]100%|██████████| 10/10 [00:01<00:00,  9.08it/s]---------------------------------------
+| eval/                    |          |
+|    normalized_score_mean | 47.6472  |
+|    normalized_score_std  | 47.7124  |
+|    reward_mean           | 1342.92  |
+|    reward_std            | 1401.35  |
+---------------------------------------
+
+eval epoch: 920
+eval_attack: True
+  0%|          | 0/10 [00:00<?, ?it/s] 20%|██        | 2/10 [00:00<00:00,  9.47it/s] 30%|███       | 3/10 [00:00<00:00,  9.50it/s] 50%|█████     | 5/10 [00:00<00:00, 10.00it/s] 60%|██████    | 6/10 [00:00<00:00,  9.76it/s] 70%|███████   | 7/10 [00:00<00:00,  9.81it/s] 90%|█████████ | 9/10 [00:00<00:00, 10.21it/s]100%|██████████| 10/10 [00:00<00:00, 10.04it/s]---------------------------------------
+| eval/                    |          |
+|    normalized_score_mean | 30.9716  |
+|    normalized_score_std  | 45.0254  |
+|    reward_mean           | 853.148  |
+|    reward_std            | 1322.43  |
+---------------------------------------
+
+eval epoch: 930
+eval_attack: True
+  0%|          | 0/10 [00:00<?, ?it/s] 20%|██        | 2/10 [00:00<00:00,  9.94it/s] 40%|████      | 4/10 [00:00<00:00, 10.17it/s] 60%|██████    | 6/10 [00:00<00:00, 10.48it/s] 80%|████████  | 8/10 [00:00<00:00, 10.36it/s]100%|██████████| 10/10 [00:00<00:00, 10.18it/s]100%|██████████| 10/10 [00:00<00:00, 10.23it/s]---------------------------------------
+| eval/                    |          |
+|    normalized_score_mean | 29.5338  |
+|    normalized_score_std  | 45.0198  |
+|    reward_mean           | 810.919  |
+|    reward_std            | 1322.27  |
+---------------------------------------
+
+eval epoch: 940
+eval_attack: True
+  0%|          | 0/10 [00:00<?, ?it/s] 20%|██        | 2/10 [00:00<00:00,  9.94it/s] 30%|███       | 3/10 [00:00<00:00,  9.67it/s] 50%|█████     | 5/10 [00:00<00:00,  9.97it/s] 60%|██████    | 6/10 [00:00<00:00,  9.96it/s] 80%|████████  | 8/10 [00:00<00:00, 10.09it/s]100%|██████████| 10/10 [00:01<00:00,  9.80it/s]100%|██████████| 10/10 [00:01<00:00,  9.87it/s]---------------------------------------
+| eval/                    |          |
+|    normalized_score_mean | 43.2719  |
+|    normalized_score_std  | 44.8449  |
+|    reward_mean           | 1214.42  |
+|    reward_std            | 1317.13  |
+---------------------------------------
+
+eval epoch: 950
+eval_attack: True
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:00,  9.70it/s] 20%|██        | 2/10 [00:00<00:00,  9.48it/s] 30%|███       | 3/10 [00:00<00:00,  9.33it/s] 50%|█████     | 5/10 [00:00<00:00,  9.85it/s] 70%|███████   | 7/10 [00:00<00:00,  9.99it/s] 80%|████████  | 8/10 [00:00<00:00,  9.98it/s] 90%|█████████ | 9/10 [00:00<00:00,  9.94it/s]100%|██████████| 10/10 [00:01<00:00,  9.87it/s]---------------------------------------
+| eval/                    |          |
+|    normalized_score_mean | 68.7469  |
+|    normalized_score_std  | 38.6436  |
+|    reward_mean           | 1962.64  |
+|    reward_std            | 1134.99  |
+---------------------------------------
+
+eval epoch: 960
+eval_attack: True
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:00,  9.38it/s] 20%|██        | 2/10 [00:00<00:00,  9.49it/s] 30%|███       | 3/10 [00:00<00:00,  9.37it/s] 50%|█████     | 5/10 [00:00<00:00,  9.71it/s] 60%|██████    | 6/10 [00:00<00:00,  9.42it/s] 70%|███████   | 7/10 [00:00<00:00,  9.54it/s] 80%|████████  | 8/10 [00:00<00:00,  9.65it/s]
