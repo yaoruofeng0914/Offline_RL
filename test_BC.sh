@@ -25,6 +25,7 @@ for env_dir in "$BASE_DIR"/*; do
         location=${remainder_1:0:3}
         remainder_2="${remainder_1#${location}_}"
         [[ "${remainder_2:0:1}" == "0" ]] && SEED="0" || SEED="1"
+        echo "$SEED"
         if [ "$mode_tag" == "rnd" ] || [ "$mode_tag" == "random" ]; then
             ATTACK_MODE="random"
         elif [ "$mode_tag" == "adv" ] || [ "$mode_tag" == "adversarial" ]; then
@@ -32,28 +33,28 @@ for env_dir in "$BASE_DIR"/*; do
         else
             continue
         fi
-
-            # --- 进度监控逻辑 ---
-        ((CURRENT_TASK++))
-            # 计算百分比
-        PERCENT=$(awk "BEGIN {printf \"%.2f\", $CURRENT_TASK*100/$TOTAL_TASKS}")
-
-            # 在同一行刷新显示进度
-        printf "\r\c"
-        printf "进度: [%-50s] %s%% (%d/%d) | 当前: %s/%s" \
-            "$(printf '#%.0s' $(seq 1 $(($CURRENT_TASK*50/$TOTAL_TASKS))))" \
-            "$PERCENT" "$CURRENT_TASK" "$TOTAL_TASKS" "BC" "$env"
+#
+#            # --- 进度监控逻辑 ---
+#        ((CURRENT_TASK++))
+#            # 计算百分比
+#        PERCENT=$(awk "BEGIN {printf \"%.2f\", $CURRENT_TASK*100/$TOTAL_TASKS}")
+#
+#            # 在同一行刷新显示进度
+#        printf "\r\c"
+#        printf "进度: [%-50s] %s%% (%d/%d) | 当前: %s/%s" \
+#            "$(printf '#%.0s' $(seq 1 $(($CURRENT_TASK*50/$TOTAL_TASKS))))" \
+#            "$PERCENT" "$CURRENT_TASK" "$TOTAL_TASKS" "BC" "$env"
 
         # --- 执行 Python 并隐藏详细输出到日志 ---
-        python  -m "algos.BC" \
-            --test_time $(date +"%Y%m%d_%H%M") \
-            --env "$env" \
-            --eval_only True \
-            --eval_attack True \
-            --corruption_mode "$ATTACK_MODE" \
-            --corruption_tag "$location" \
-            --seed "$SEED" \
-            --checkpoint_dir "$condition_dir" >> "$LOG_FILE" 2>&1
+#        python  -m "algos.BC" \
+#            --test_time $(date +"%Y%m%d_%H%M") \
+#            --env "$env" \
+#            --eval_only True \
+#            --eval_attack True \
+#            --corruption_mode "$ATTACK_MODE" \
+#            --corruption_tag "$location" \
+#            --seed "$SEED" \
+#            --checkpoint_dir "$condition_dir" >> "$LOG_FILE" 2>&1
     done
 done
 

@@ -992,7 +992,7 @@ def test(config: TrainConfig, logger: Logger):
         h5path = (
             config.dataset_path
             if config.dataset_path is None
-            else os.path.expanduser(f"{config.dataset_path}/{config.env}.hdf5")
+            else os.path.join(config.dataset_path,"original",f"{config.env}.hdf5")
         )
         dataset = env.get_dataset(h5path=h5path)
 

@@ -289,7 +289,7 @@ def load_clean_dataset(config):
         h5path = (
             config.dataset_path
             if config.dataset_path is None
-            else os.path.expanduser(f"{config.dataset_path}/{config.env}.hdf5")
+            else os.path.join(config.dataset_path, "original", f"{config.env}.hdf5")
         )
         dataset = gym.make(config.env).get_dataset(h5path=h5path)
     return dataset
@@ -302,3 +302,30 @@ def get_state_std(config):
     rew_std = compute_mean_std(clean_dataset["rewards"], eps=1e-3)[1]
     rew_min = clean_dataset["rewards"].min()
     return state_std, act_std, rew_std, rew_min
+
+
+
+# if __name__ == '__main__':
+#     # 1. 模拟一个 config 对象（可以使用简单的 dataclass 或 dict 转换）
+#     class MockConfig:
+#         def __init__(self):
+#             self.sample_ratio = 1.0  # 设为 1.0 走 hdf5 分支，设为 0.1 走 .pt 分支
+#             self.dataset_path = "/home/user/Offline_RL"# 替换成你本地实际的 D4RL 数据集路径
+#             self.env = "kitchen-complete-v0"   # 替换成你测试用的环境名
+#
+#
+#     test_config = MockConfig()
+#
+#     # 2. 在这里打个断点 (红点)
+#     print(f"开始测试加载环境: {test_config.env}")
+#
+#     try:
+#         # 3. 调用你要 debug 的函数
+#         dataset = load_clean_dataset(test_config)
+#
+#         # 4. 检查输出结果
+#         print("✅ 数据集加载成功！")
+#         print(f"数据集包含的键值: {dataset.keys()}")
+#         print(f"observations 形状: {dataset['observations'].shape}")
+#     except Exception as e:
+#         print(f"❌ 数据集加载失败: {e}")

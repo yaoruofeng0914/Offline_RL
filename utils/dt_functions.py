@@ -7,7 +7,7 @@ import gym
 import numpy as np
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 from collections import defaultdict
 from tqdm.auto import trange  # noqa
 
@@ -273,6 +273,58 @@ def eval_fn(config, env, model, eval_attacker=None):
     return eval_log
 
 
+# --- 创新点 1: 多尺度小波池化注意力 (MWPA) ---
+class WaveletFeatureEnhancer(nn.Module):
+    def __init__(self, embed_dim):
+        super().__init__()
+        # 使用不同空洞率的卷积模拟多尺度小波分解 (保持长度 T 不变)
+        self.low_freq = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=1, groups=embed_dim)
+        self.mid_freq = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=2, dilation=2, groups=embed_dim)
+
+        # 可学习的缩放因子 (初始设为 0，保证刚开始和原版 RDT 完全一样)
+        self.gain = nn.Parameter(torch.zeros(1))
+        self.proj = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, x):
+        # x: [B, T, C]
+        identity = x
+        x_transpose = x.transpose(1, 2)  # [B, C, T]
+
+        # 1. 提取低频趋势 (平滑后的状态)
+        low = self.low_freq(x_transpose)
+
+        # 2. 提取细节分量 (原信号 - 低频 = 高频细节)
+        detail = x_transpose - low
+
+        # 3. 软阈值处理 (自适应去噪)
+        # 只有强度大于一定程度的信号才被认为是有效的
+        detail = F.softshrink(detail, lambd=0.01)
+
+        # 4. 多尺度融合
+        combined = (low + detail).transpose(1, 2)
+
+        # 5. 残差连接：x = x + gain * 增强特征
+        return identity + self.gain * self.proj(combined)
+# --- 创新点 2: 对比 Koopman 流形模块 ---
+class ContrastiveKoopman(nn.Module):
+    def __init__(self, state_dim, hidden_dim=128):
+        super().__init__()
+        # 编码器 g(s) 将状态映射到线性流形
+        self.g = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        # 线性算子 K (Koopman Matrix)
+        self.K = nn.Parameter(torch.eye(hidden_dim) + torch.randn(hidden_dim, hidden_dim) * 0.01)
+
+    def forward(self, s_t, s_next):
+        g_t = self.g(s_t)  # [B, T, hidden]
+        g_next_true = self.g(s_next)
+        g_next_pred = g_t @ self.K  # 预测下一步应该在哪
+        return g_next_true, g_next_pred, g_t
+
 class DecisionTransformer(nn.Module):
     def __init__(
             self,
@@ -295,8 +347,14 @@ class DecisionTransformer(nn.Module):
             use_stochastic: bool = False,
             init_temperature: float = 0.1,
             corruption_tag: str = "none",
+            use_mwpa: bool = True,  # 开关1：小波注意力
+            use_koopman: bool = True,  # 开关2：对比学习约束
+            use_asts: bool = False,  # 开关3：在线引导
     ):
         super().__init__()
+        self.use_mwpa = use_mwpa
+        self.use_koopman = use_koopman
+        self.use_asts = use_asts
         self.corruption_tag = corruption_tag
         if embedding_dropout is not None:
             self.emb_drop = nn.Dropout(embedding_dropout)
@@ -306,10 +364,10 @@ class DecisionTransformer(nn.Module):
         # additional seq_len embeddings for padding timesteps
         self.timestep_emb = nn.Embedding(episode_len + seq_len, embedding_dim)
 
-        self.state_emb = nn.Linear(state_dim, embedding_dim) if not mlp_embedding else ResidualBlock(state_dim,
-                                                                                                     embedding_dim)
-        self.action_emb = nn.Linear(action_dim, embedding_dim) if not mlp_embedding else ResidualBlock(action_dim,
-                                                                                                       embedding_dim)
+        self.state_emb = nn.Linear(state_dim, embedding_dim) if not mlp_embedding else ResidualBlock(state_dim,embedding_dim)
+
+        self.action_emb = nn.Linear(action_dim, embedding_dim) if not mlp_embedding else ResidualBlock(action_dim,embedding_dim)
+
         self.return_emb = nn.Linear(1, embedding_dim) if not mlp_embedding else ResidualBlock(1, embedding_dim)
 
         effective_seq_len = 3 * seq_len
@@ -322,10 +380,19 @@ class DecisionTransformer(nn.Module):
                 num_heads=num_heads,
                 attention_dropout=attention_dropout,
                 residual_dropout=residual_dropout,
-            )
+                )
             for _ in range(num_layers)
+
+
             ]
         )
+        if self.use_mwpa:
+            self.wavelet_enhancer = WaveletFeatureEnhancer(embedding_dim)
+        if self.use_koopman:
+            self.koopman = ContrastiveKoopman(state_dim, embedding_dim)
+
+            # --- 初始化 ASTS 向量 ---
+        self.register_buffer('steering_vector', torch.zeros(1, 1, embedding_dim))
 
         self.predict_dropout = nn.Dropout(predict_dropout)
 
@@ -437,9 +504,12 @@ class DecisionTransformer(nn.Module):
         out = self.emb_norm(sequence)
         if hasattr(self, "emb_drop"):
             out = self.emb_drop(out)
-
+        if self.use_mwpa:
+            out = self.wavelet_enhancer(out)
         for block in self.blocks:
             out = block(out, padding_mask=padding_mask)
+        if not self.training and self.use_asts:
+            out = out + self.steering_vector
 
         out = self.out_norm(out)
 
