@@ -278,8 +278,8 @@ class WaveletFeatureEnhancer(nn.Module):
     def __init__(self, embed_dim):
         super().__init__()
         # 使用不同空洞率的卷积模拟多尺度小波分解 (保持长度 T 不变)
-        self.low_freq = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=1, groups=embed_dim)
-        self.mid_freq = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=2, dilation=2, groups=embed_dim)
+        self.low_freq = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=0, groups=embed_dim)
+        self.mid_freq = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=0, dilation=2, groups=embed_dim)
 
         # 可学习的缩放因子 (初始设为 0，保证刚开始和原版 RDT 完全一样)
         self.gain = nn.Parameter(torch.zeros(1))
@@ -291,7 +291,8 @@ class WaveletFeatureEnhancer(nn.Module):
         x_transpose = x.transpose(1, 2)  # [B, C, T]
 
         # 1. 提取低频趋势 (平滑后的状态)
-        low = self.low_freq(x_transpose)
+        x_pad_low = F.pad(x_transpose, (2, 0))
+        low = self.low_freq(x_pad_low)
 
         # 2. 提取细节分量 (原信号 - 低频 = 高频细节)
         detail = x_transpose - low
@@ -387,7 +388,9 @@ class DecisionTransformer(nn.Module):
             ]
         )
         if self.use_mwpa:
-            self.wavelet_enhancer = WaveletFeatureEnhancer(embedding_dim)
+            self.wavelet_S = WaveletFeatureEnhancer(embedding_dim)
+            self.wavelet_A = WaveletFeatureEnhancer(embedding_dim)
+            self.wavelet_R = WaveletFeatureEnhancer(embedding_dim)
         if self.use_koopman:
             self.koopman = ContrastiveKoopman(state_dim, embedding_dim)
 
@@ -480,7 +483,10 @@ class DecisionTransformer(nn.Module):
         state_emb = self.state_emb(states)
         act_emb = self.action_emb(actions)
         returns_emb = self.return_emb(returns_to_go)
-
+        if self.use_mwpa:
+            state_emb = self.wavelet_S(state_emb)
+            act_emb = self.wavelet_A(act_emb)
+            returns_emb = self.wavelet_R(returns_emb)
         # [batch_size, seq_len * 3, emb_dim], (r_0, s_0, a_0, r_1, s_1, a_1, ...)
         if self.embed_order == "rsa":
             sequence = torch.stack([returns_emb, state_emb, act_emb], dim=1)
@@ -504,8 +510,6 @@ class DecisionTransformer(nn.Module):
         out = self.emb_norm(sequence)
         if hasattr(self, "emb_drop"):
             out = self.emb_drop(out)
-        if self.use_mwpa:
-            out = self.wavelet_enhancer(out)
         for block in self.blocks:
             out = block(out, padding_mask=padding_mask)
         if not self.training and self.use_asts:
