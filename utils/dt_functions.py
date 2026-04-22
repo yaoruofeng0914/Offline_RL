@@ -166,7 +166,7 @@ class SequenceDataset:
 
 
 # Training and evaluation logic
-@torch.no_grad()
+# @torch.no_grad()
 def eval_rollout(
         model: nn.Module,
         env: gym.Env,
@@ -206,39 +206,77 @@ def eval_rollout(
         # first select history up to step, then select last seq_len states,
         # step + 1 as : operator is not inclusive, last action is dummy with zeros
         # (as model will predict last, actual last values are not important)
-        predicted = model(  # fix this noqa!!!
-            states[:, : step + 1][:, -model.seq_len:],
-            actions[:, : step + 1][:, -model.seq_len:],
-            returns[:, : step + 1][:, -model.seq_len:],
-            time_steps[:, : step + 1][:, -model.seq_len:],
-        )
-        predicted_actions = predicted[0]
-        if use_stochastic:
-            predicted_actions = predicted_actions.mean
-        predicted_action = predicted_actions[0, -1].cpu().numpy()
-        if eval_attacker is not None and eval_attack_tag == "act":
-            attack_flag = np.random.rand()
-            if attack_flag < eval_corruption_rate:
-                predicted_action = eval_attacker.attack_act(predicted_action)
-        predicted_action = np.clip(predicted_action, *action_range)
-        next_state, reward, done, info = env.step(predicted_action)
-        episode_return += reward
-        episode_len += 1
-        if eval_attacker is not None and eval_attack_tag == "obs":
-            attack_flag = np.random.rand()
-            if attack_flag < eval_corruption_rate:
-                next_state = eval_attacker.attack_obs(next_state)
-        if eval_attacker is not None and eval_attack_tag == "rew":
-            attack_flag = np.random.rand()
-            if attack_flag < eval_corruption_rate:
-                reward = eval_attacker.attack_rew(reward)
-        # at step t, we predict a_t, get s_{t + 1}, r_{t + 1}
-        actions[:, step] = torch.as_tensor(predicted_action)
-        states[:, step + 1] = torch.as_tensor(next_state)
-        returns[:, step + 1] = torch.as_tensor(returns[:, step] - reward)
+        if model.use_asts and not model.training:
+            model.steering_vector.data.zero_()  # 清空上一帧的残留
 
-        if done:
-            break
+            with torch.enable_grad():
+                model.steering_vector.requires_grad = True
+                optimizer = torch.optim.Adam([model.steering_vector], lr=0.01)
+
+                # 局部迭代 3 次寻找安全动作
+                for _ in range(3):
+                    optimizer.zero_grad()
+                    preds = model(
+                        states[:, : step + 1][:, -model.seq_len:],
+                        actions[:, : step + 1][:, -model.seq_len:],
+                        returns[:, : step + 1][:, -model.seq_len:],
+                        time_steps[:, : step + 1][:, -model.seq_len:],
+                    )
+
+                    steer_loss = 0.0
+                    action_preds = preds[0]
+                    curr_act = action_preds.mean[0, -1] if use_stochastic else action_preds[0, -1]
+
+                    # 引导 1：追求高额 Reward (纠正被投毒的目标)
+                    if model.predict_reward and preds[1] is not None:
+                        steer_loss -= preds[1][0, -1].mean()
+
+                        # 引导 2：动作平滑 (防止被噪声骗得乱抽搐)
+                    if step > 0:
+                        steer_loss += F.mse_loss(curr_act, actions[:, step - 1].detach()) * 0.1
+
+                    # 引导 3：Koopman 动力学约束 (防止动作过大导致模型崩盘)
+                    if model.use_koopman:
+                        # 惩罚导致物理状态产生剧烈、非线性跃迁的动作
+                        dynamic_shift = model.koopman.B(curr_act.unsqueeze(0))
+                        steer_loss += torch.norm(dynamic_shift) * 0.05
+
+                    steer_loss.backward(retain_graph=True)
+                    optimizer.step()
+        with torch.no_grad():
+            predicted = model(  # fix this noqa!!!
+                states[:, : step + 1][:, -model.seq_len:],
+                actions[:, : step + 1][:, -model.seq_len:],
+                returns[:, : step + 1][:, -model.seq_len:],
+                time_steps[:, : step + 1][:, -model.seq_len:],
+            )
+            predicted_actions = predicted[0]
+            if use_stochastic:
+                predicted_actions = predicted_actions.mean
+            predicted_action = predicted_actions[0, -1].cpu().numpy()
+            if eval_attacker is not None and eval_attack_tag == "act":
+                attack_flag = np.random.rand()
+                if attack_flag < eval_corruption_rate:
+                    predicted_action = eval_attacker.attack_act(predicted_action)
+            predicted_action = np.clip(predicted_action, *action_range)
+            next_state, reward, done, info = env.step(predicted_action)
+            episode_return += reward
+            episode_len += 1
+            if eval_attacker is not None and eval_attack_tag == "obs":
+                attack_flag = np.random.rand()
+                if attack_flag < eval_corruption_rate:
+                    next_state = eval_attacker.attack_obs(next_state)
+            if eval_attacker is not None and eval_attack_tag == "rew":
+                attack_flag = np.random.rand()
+                if attack_flag < eval_corruption_rate:
+                    reward = eval_attacker.attack_rew(reward)
+            # at step t, we predict a_t, get s_{t + 1}, r_{t + 1}
+            actions[:, step] = torch.as_tensor(predicted_action)
+            states[:, step + 1] = torch.as_tensor(next_state)
+            returns[:, step + 1] = torch.as_tensor(returns[:, step] - reward)
+
+            if done:
+                break
     return episode_return, episode_len
 
 
@@ -308,7 +346,7 @@ class WaveletFeatureEnhancer(nn.Module):
         return identity + self.gain * self.proj(combined)
 # --- 创新点 2: 对比 Koopman 流形模块 ---
 class ContrastiveKoopman(nn.Module):
-    def __init__(self, state_dim, hidden_dim=128):
+    def __init__(self, state_dim, action_dim, hidden_dim=128):
         super().__init__()
         # 编码器 g(s) 将状态映射到线性流形
         self.g = nn.Sequential(
@@ -319,11 +357,13 @@ class ContrastiveKoopman(nn.Module):
         )
         # 线性算子 K (Koopman Matrix)
         self.K = nn.Parameter(torch.eye(hidden_dim) + torch.randn(hidden_dim, hidden_dim) * 0.01)
+        self.B = nn.Linear(action_dim, hidden_dim, bias=False)
 
-    def forward(self, s_t, s_next):
+    def forward(self, s_t, a_t, s_next):
         g_t = self.g(s_t)  # [B, T, hidden]
         g_next_true = self.g(s_next)
-        g_next_pred = g_t @ self.K  # 预测下一步应该在哪
+
+        g_next_pred = g_t @ self.K + self.B(a_t) # 预测下一步应该在哪
         return g_next_true, g_next_pred, g_t
 
 class DecisionTransformer(nn.Module):
@@ -392,7 +432,7 @@ class DecisionTransformer(nn.Module):
             self.wavelet_A = WaveletFeatureEnhancer(embedding_dim)
             self.wavelet_R = WaveletFeatureEnhancer(embedding_dim)
         if self.use_koopman:
-            self.koopman = ContrastiveKoopman(state_dim, embedding_dim)
+            self.koopman = ContrastiveKoopman(state_dim, action_dim, embedding_dim)
 
             # --- 初始化 ASTS 向量 ---
         self.register_buffer('steering_vector', torch.zeros(1, 1, embedding_dim))
@@ -479,8 +519,10 @@ class DecisionTransformer(nn.Module):
         time_emb = self.timestep_emb(time_steps)
         # act_emb = self.action_emb(actions)
         # returns_emb = self.return_emb(returns_to_go)
-
-        state_emb = self.state_emb(states)
+        if self.use_koopman:
+            state_emb = self.koopman.g(states)
+        else:
+            state_emb = self.state_emb(states)
         act_emb = self.action_emb(actions)
         returns_emb = self.return_emb(returns_to_go)
         if self.use_mwpa:

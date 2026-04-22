@@ -356,12 +356,15 @@ def compute_loss(config, model, batch):
     log_dict.update({"loss_reward": loss_reward.item()})
     #### new
     if model.use_koopman:
-        # 取连续的两个状态 s_t 和 s_{t+1}
+        # 🌟 修复：取连续的两个状态 s_t 和 s_{t+1}，以及对应的动作 a_t
         st, st_next = states[:, :-1, :], states[:, 1:, :]
+        act_t = actions[:, :-1, :]
+
         # 构造负样本 (加噪声)
         st_corr = st_next + torch.randn_like(st_next) * 0.1
 
-        g_next_true, g_next_pred, _ = model.koopman(st, st_next)
+        # 🌟 修复：把 act_t 传给 Koopman，让它知道动作是如何改变物理流形的
+        g_next_true, g_next_pred, _ = model.koopman(st, act_t, st_next)
 
         # 计算余弦相似度进行对比学习
         sim_pos = F.cosine_similarity(g_next_pred, g_next_true, dim=-1)
