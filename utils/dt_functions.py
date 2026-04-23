@@ -207,42 +207,60 @@ def eval_rollout(
         # step + 1 as : operator is not inclusive, last action is dummy with zeros
         # (as model will predict last, actual last values are not important)
         if model.use_asts and not model.training:
-            model.steering_vector.data.zero_()  # 清空上一帧的残留
+            with torch.no_grad():
+                clean_preds = model(
+                    states[:, : step + 1][:, -model.seq_len:],
+                    actions[:, : step + 1][:, -model.seq_len:],
+                    returns[:, : step + 1][:, -model.seq_len:],
+                    time_steps[:, : step + 1][:, -model.seq_len:],
+                )
+                clean_action_preds = clean_preds[0]
+                clean_curr_act = clean_action_preds.mean[0, -1] if use_stochastic else clean_action_preds[0, -1]
 
-            with torch.enable_grad():
-                model.steering_vector.requires_grad = True
-                optimizer = torch.optim.Adam([model.steering_vector], lr=0.01)
+                shift_norm = 999.0
+                if model.use_koopman:
+                    dynamic_shift = model.koopman.B(clean_curr_act.unsqueeze(0))
+                    shift_norm = torch.norm(dynamic_shift).item()
 
-                # 局部迭代 3 次寻找安全动作
-                for _ in range(3):
-                    optimizer.zero_grad()
-                    preds = model(
-                        states[:, : step + 1][:, -model.seq_len:],
-                        actions[:, : step + 1][:, -model.seq_len:],
-                        returns[:, : step + 1][:, -model.seq_len:],
-                        time_steps[:, : step + 1][:, -model.seq_len:],
-                    )
+            # =================================================================
+            # 🌟 智能死区：只有物理跃迁超过阈值 (0.15) 才允许 ASTS 介入！
+            # =================================================================
+            if shift_norm > 0.15:
+                model.steering_vector.data.zero_()  # 清空上一帧的残留
 
-                    steer_loss = 0.0
-                    action_preds = preds[0]
-                    curr_act = action_preds.mean[0, -1] if use_stochastic else action_preds[0, -1]
+                with torch.enable_grad():
+                    model.steering_vector.requires_grad = True
+                    # 针对 kitchen 等高精度微操任务，学习率降到 0.005 会更平稳
+                    optimizer = torch.optim.Adam([model.steering_vector], lr=0.005)
 
-                    # 引导 1：追求高额 Reward (纠正被投毒的目标)
-                    if model.predict_reward and preds[1] is not None:
-                        steer_loss -= preds[1][0, -1].mean()
+                    for _ in range(3):
+                        optimizer.zero_grad()
+                        preds = model(
+                            states[:, : step + 1][:, -model.seq_len:],
+                            actions[:, : step + 1][:, -model.seq_len:],
+                            returns[:, : step + 1][:, -model.seq_len:],
+                            time_steps[:, : step + 1][:, -model.seq_len:],
+                        )
 
-                        # 引导 2：动作平滑 (防止被噪声骗得乱抽搐)
-                    if step > 0:
-                        steer_loss += F.mse_loss(curr_act, actions[:, step - 1].detach()) * 0.1
+                        steer_loss = 0.0
+                        action_preds = preds[0]
+                        curr_act = action_preds.mean[0, -1] if use_stochastic else action_preds[0, -1]
 
-                    # 引导 3：Koopman 动力学约束 (防止动作过大导致模型崩盘)
-                    if model.use_koopman:
-                        # 惩罚导致物理状态产生剧烈、非线性跃迁的动作
-                        dynamic_shift = model.koopman.B(curr_act.unsqueeze(0))
-                        steer_loss += torch.norm(dynamic_shift) * 0.05
+                        if model.predict_reward and preds[1] is not None:
+                            steer_loss -= preds[1][0, -1].mean()
 
-                    steer_loss.backward(retain_graph=True)
-                    optimizer.step()
+                        if step > 0:
+                            steer_loss += F.mse_loss(curr_act, actions[:, step - 1].detach()) * 0.1
+
+                        if model.use_koopman:
+                            steer_shift = model.koopman.B(curr_act.unsqueeze(0))
+                            steer_loss += torch.norm(steer_shift) * 0.05
+
+                        steer_loss.backward(retain_graph=True)
+                        optimizer.step()
+            else:
+                # 🌟 环境安全，清理 steering_vector，直接放行原始动作！
+                model.steering_vector.data.zero_()
         with torch.no_grad():
             predicted = model(  # fix this noqa!!!
                 states[:, : step + 1][:, -model.seq_len:],
