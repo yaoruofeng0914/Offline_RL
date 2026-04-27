@@ -331,13 +331,11 @@ def eval_fn(config, env, model, eval_attacker=None):
 
 # --- 创新点 1: 多尺度小波池化注意力 (MWPA) ---
 class WaveletFeatureEnhancer(nn.Module):
-    def __init__(self, embed_dim):
+    def __init__(self, embed_dim, kernel_size=2):  # 🌟 不要 lambd 参数了
         super().__init__()
-        # 使用不同空洞率的卷积模拟多尺度小波分解 (保持长度 T 不变)
-        self.low_freq = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=0, groups=embed_dim)
-        self.mid_freq = nn.Conv1d(embed_dim, embed_dim, kernel_size=3, padding=0, dilation=2, groups=embed_dim)
+        self.kernel_size = kernel_size
+        self.low_freq = nn.Conv1d(embed_dim, embed_dim, kernel_size=kernel_size, padding=0, groups=embed_dim)
 
-        # 可学习的缩放因子 (初始设为 0，保证刚开始和原版 RDT 完全一样)
         self.gain = nn.Parameter(torch.zeros(1))
         self.proj = nn.Linear(embed_dim, embed_dim)
 
@@ -347,15 +345,16 @@ class WaveletFeatureEnhancer(nn.Module):
         x_transpose = x.transpose(1, 2)  # [B, C, T]
 
         # 1. 提取低频趋势 (平滑后的状态)
-        x_pad_low = F.pad(x_transpose, (2, 0))
+        # 🌟 动态因果补零！
+        x_pad_low = F.pad(x_transpose, (self.kernel_size - 1, 0))
         low = self.low_freq(x_pad_low)
 
         # 2. 提取细节分量 (原信号 - 低频 = 高频细节)
         detail = x_transpose - low
 
         # 3. 软阈值处理 (自适应去噪)
-        # 只有强度大于一定程度的信号才被认为是有效的
-        detail = F.softshrink(detail, lambd=0.01)
+        # 🌟 阈值调小为 0.005
+        detail = F.softshrink(detail, lambd=0.005)
 
         # 4. 多尺度融合
         combined = (low + detail).transpose(1, 2)
@@ -446,9 +445,10 @@ class DecisionTransformer(nn.Module):
             ]
         )
         if self.use_mwpa:
-            self.wavelet_S = WaveletFeatureEnhancer(embedding_dim)
-            self.wavelet_A = WaveletFeatureEnhancer(embedding_dim)
-            self.wavelet_R = WaveletFeatureEnhancer(embedding_dim)
+            # 🌟 S和A用小核敏锐捕捉，R用大核低通滤波。没有额外的 lambd 传参。
+            self.wavelet_S = WaveletFeatureEnhancer(embedding_dim, kernel_size=2)
+            self.wavelet_A = WaveletFeatureEnhancer(embedding_dim, kernel_size=2)
+            self.wavelet_R = WaveletFeatureEnhancer(embedding_dim, kernel_size=4)
         if self.use_koopman:
             self.koopman = ContrastiveKoopman(state_dim, action_dim, embedding_dim)
 

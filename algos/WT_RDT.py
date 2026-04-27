@@ -356,29 +356,28 @@ def compute_loss(config, model, batch):
     log_dict.update({"loss_reward": loss_reward.item()})
     #### new
     if model.use_koopman:
-        # 🌟 修复：取连续的两个状态 s_t 和 s_{t+1}，以及对应的动作 a_t
         st, st_next = states[:, :-1, :], states[:, 1:, :]
         act_t = actions[:, :-1, :]
 
-        # 构造负样本 (加噪声)
+        # 1. 仅构造最基本的高斯白噪声负样本 (维持流形的平滑性与线性比例)
         st_corr = st_next + torch.randn_like(st_next) * 0.1
 
-        # 🌟 修复：把 act_t 传给 Koopman，让它知道动作是如何改变物理流形的
+        # 2. 前向传播获取预测流形和真实流形
         g_next_true, g_next_pred, _ = model.koopman(st, act_t, st_next)
 
-        # 计算余弦相似度进行对比学习
+        # 3. 计算正样本和单一负样本的余弦相似度
         sim_pos = F.cosine_similarity(g_next_pred, g_next_true, dim=-1)
         sim_neg = F.cosine_similarity(g_next_pred, model.koopman.g(st_corr), dim=-1)
 
-        # InfoNCE 风格的损失
+        # 4. 二元 InfoNCE 损失
         logits = torch.stack([sim_pos, sim_neg], dim=-1) / 0.1
         labels = torch.zeros(logits.size(0) * logits.size(1), dtype=torch.long, device=config.device)
+
+        # 🌟 恢复为二分类交叉熵 (只推开高斯噪声，绝不撕裂尺度)
         loss_k = F.cross_entropy(logits.view(-1, 2), labels)
 
         loss += config.koopman_coef * loss_k
         log_dict.update({"loss_koopman": loss_k.item()})
-        ####
-    log_dict.update({"policy_loss": loss.item()})
 
     data_info = None
     if config.correct_thershold is not None:
