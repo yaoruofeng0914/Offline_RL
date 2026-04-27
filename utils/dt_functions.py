@@ -202,6 +202,7 @@ def eval_rollout(
 
     # cannot step higher than model episode len, as timestep embeddings will crash
     episode_return, episode_len = 0.0, 0.0
+    env_is_poisoned = False
     for step in range(model.episode_len):
         # first select history up to step, then select last seq_len states,
         # step + 1 as : operator is not inclusive, last action is dummy with zeros
@@ -247,7 +248,8 @@ def eval_rollout(
                         curr_act = action_preds.mean[0, -1] if use_stochastic else action_preds[0, -1]
 
                         if model.predict_reward and preds[1] is not None:
-                            steer_loss -= preds[1][0, -1].mean()
+                            if not env_is_poisoned:
+                                steer_loss -= preds[1][0, -1].mean()
 
                         if step > 0:
                             steer_loss += F.mse_loss(curr_act, actions[:, step - 1].detach()) * 0.1
@@ -288,10 +290,21 @@ def eval_rollout(
                 attack_flag = np.random.rand()
                 if attack_flag < eval_corruption_rate:
                     reward = eval_attacker.attack_rew(reward)
+            pred_reward_val = 0.0
+            if model.predict_reward and predicted[1] is not None:
+                pred_reward_val = predicted[1][0, -1].cpu().item()
+
+            divergence_threshold = max(0.5, abs(pred_reward_val) * 2.0)
+            if abs(pred_reward_val - reward) > divergence_threshold:
+                env_is_poisoned = True  # 触发测谎仪
+                trusted_reward = pred_reward_val  # 截断毒源
+            else:
+                env_is_poisoned = False
+                trusted_reward = reward
             # at step t, we predict a_t, get s_{t + 1}, r_{t + 1}
             actions[:, step] = torch.as_tensor(predicted_action)
             states[:, step + 1] = torch.as_tensor(next_state)
-            returns[:, step + 1] = torch.as_tensor(returns[:, step] - reward)
+            returns[:, step + 1] = torch.as_tensor(returns[:, step] - trusted_reward)
 
             if done:
                 break
