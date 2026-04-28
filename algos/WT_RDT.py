@@ -108,7 +108,7 @@ class TrainConfig:
     #new for WT
     use_mwpa: bool = True
     use_koopman: bool = True
-    use_asts: bool = False
+    use_asts: bool = True
     koopman_coef: float = 0.01  # Koopman 损失系数
 
     def __post_init__(self):
