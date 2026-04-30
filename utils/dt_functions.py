@@ -294,7 +294,7 @@ def eval_rollout(
             if model.predict_reward and predicted[1] is not None:
                 pred_reward_val = predicted[1][0, -1].cpu().item()
 
-            divergence_threshold = max(0.5, abs(pred_reward_val) * 2.0)
+            divergence_threshold = abs(pred_reward_val) * 0.5 + 0.05
             if abs(pred_reward_val - reward) > divergence_threshold:
                 env_is_poisoned = True  # 触发测谎仪
                 trusted_reward = pred_reward_val  # 截断毒源

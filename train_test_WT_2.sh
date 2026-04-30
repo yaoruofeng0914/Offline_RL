@@ -6,19 +6,20 @@
 # =================================================================
 
 ENVS=(
-#    "door-expert-v0"
-##    "halfcheetah-medium-replay-v2"
-#    "hammer-expert-v0"
-#    "hopper-medium-replay-v2"
+    "door-expert-v0"
+    "halfcheetah-medium-replay-v2"
+    "hammer-expert-v0"
+    "hopper-medium-replay-v2"
     "kitchen-complete-v0"
-#    "kitchen-mixed-v0"
-##    "kitchen-partial-v0"
-#    "relocate-expert-v0"
-##    "walker2d-medium-replay-v2"
+    "kitchen-mixed-v0"
+    "kitchen-partial-v0"
+    "relocate-expert-v0"
+    "walker2d-medium-replay-v2"
 )
 
 MODES=("random" "adversarial")
-TAGS=("obs" "act" "rew")
+TAGS=("rew")
+#"obs" "act"
 
 # 🌟 核心参数设置：只开 MWPA，不开 Koopman 和 ASTS
 PARAMS="--use_mwpa True --use_koopman True --use_asts True"
@@ -66,4 +67,4 @@ for ENV in "${ENVS[@]}"; do
 done
 
 wait
-echo "🎉 54 项 WT-RDT 专项任务已全部跑完！"
+echo "任务已全部跑完！"
