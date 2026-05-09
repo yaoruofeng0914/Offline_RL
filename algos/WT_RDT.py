@@ -111,6 +111,16 @@ class TrainConfig:
     use_asts: bool = True
     koopman_coef: float = 0.01  # Koopman 损失系数
 
+    asts_lr: float = 0.002  # 信任域微调学习率 (推荐 0.002)
+    asts_optim_steps: int = 3  # 梯度微调步数
+    asts_max_norm: float = 0.04  # L2 信任域球面半径极限
+    asts_anchor_weight: float = 0.5  # 策略锚点(对抗 act 攻击)的牵引权重
+    asts_koopman_threshold: float = 0.15  # Koopman 物理流形报警死区
+
+    # 无 Koopman 时的后备统计 Z-Score 触发器参数
+    asts_z_window: int = 5  # 滑动统计窗口大小
+    asts_z_state_th: float = 3.0  # 状态突变 3-Sigma 阈值
+    asts_z_act_th: float = 2.0  # 动作突变 2-Sigma 阈值
     def __post_init__(self):
         # train
         # if not self.eval_only:

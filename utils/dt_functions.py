@@ -218,21 +218,55 @@ def eval_rollout(
                 clean_action_preds = clean_preds[0]
                 clean_curr_act = clean_action_preds.mean[0, -1] if use_stochastic else clean_action_preds[0, -1]
 
-                shift_norm = 999.0
-                if model.use_koopman:
-                    dynamic_shift = model.koopman.B(clean_curr_act.unsqueeze(0))
-                    shift_norm = torch.norm(dynamic_shift).item()
+            # =================================================================
+            # 🌟 1. 双核正交触发器 (Dual-Core Orthogonal Trigger)
+            # =================================================================
+            trigger_asts = False
+
+            # [基础防御层] 纯统计驱动的滑动窗口 Z-Score 异常检测 (全局常驻，保障基线公平)
+            if step > 0:
+                current_state_drift = torch.norm(states[:, step] - states[:, step - 1]).item()
+                current_action_drift = torch.norm(clean_curr_act - actions[:, step - 1]).item()
+
+                window_size = min(step, 5)
+                start_idx = step - window_size
+
+                historical_states = states[:, start_idx:step + 1]
+                historical_actions = actions[:, start_idx:step + 1]
+
+                hist_state_drifts = torch.norm(historical_states[:, 1:] - historical_states[:, :-1], dim=-1)[0]
+                hist_act_drifts = torch.norm(historical_actions[:, 1:] - historical_actions[:, :-1], dim=-1)[0]
+
+                if window_size >= 3:
+                    state_mu = hist_state_drifts[:-1].mean().item()
+                    state_std = hist_state_drifts[:-1].std().item() + 1e-5
+
+                    act_mu = hist_act_drifts[:-1].mean().item()
+                    act_std = hist_act_drifts[:-1].std().item() + 1e-5
+
+                    state_z = (current_state_drift - state_mu) / state_std
+                    act_z = (current_action_drift - act_mu) / act_std
+
+                    # 只要发生统计学突变，激活 ASTS
+                    if state_z > 3.0 and act_z > 2.0:
+                        trigger_asts = True
+
+            # [高级防御层] Koopman 物理流形绝对报警
+            if model.use_koopman:
+                dynamic_shift = model.koopman.B(clean_curr_act.unsqueeze(0))
+                # 即使统计学未发现异常，只要违反物理流形，强制激活 ASTS
+                if torch.norm(dynamic_shift).item() > 0.15:
+                    trigger_asts = True
 
             # =================================================================
-            # 🌟 智能死区：只有物理跃迁超过阈值 (0.15) 才允许 ASTS 介入！
+            # 🌟 2. 带有 L2 信任域和自我锚点的优化器 (TR-ASTS)
             # =================================================================
-            if shift_norm > 0.15:
-                model.steering_vector.data.zero_()  # 清空上一帧的残留
+            if trigger_asts:
+                model.steering_vector.data.zero_()
 
                 with torch.enable_grad():
                     model.steering_vector.requires_grad = True
-                    # 针对 kitchen 等高精度微操任务，学习率降到 0.005 会更平稳
-                    optimizer = torch.optim.Adam([model.steering_vector], lr=0.005)
+                    optimizer = torch.optim.Adam([model.steering_vector], lr=0.002)
 
                     for _ in range(3):
                         optimizer.zero_grad()
@@ -247,21 +281,29 @@ def eval_rollout(
                         action_preds = preds[0]
                         curr_act = action_preds.mean[0, -1] if use_stochastic else action_preds[0, -1]
 
+                        # A. 奖励导向优化
                         if model.predict_reward and preds[1] is not None:
                             if not env_is_poisoned:
                                 steer_loss -= preds[1][0, -1].mean()
 
-                        if step > 0:
-                            steer_loss += F.mse_loss(curr_act, actions[:, step - 1].detach()) * 0.1
+                        # B. 🌟 绝对公平的锚点平滑 (固定权重)
+                        # 为了消融实验的严谨性，统一向第一直觉对齐
+                        steer_loss += F.mse_loss(curr_act, clean_curr_act.detach()) * 0.5
 
+                        # C. 物理流形引力 (如果开启)
                         if model.use_koopman:
                             steer_shift = model.koopman.B(curr_act.unsqueeze(0))
                             steer_loss += torch.norm(steer_shift) * 0.05
 
                         steer_loss.backward(retain_graph=True)
                         optimizer.step()
+
+                        # D. L2 信任域球面投影
+                        max_norm = 0.04
+                        vec_norm = torch.norm(model.steering_vector.data)
+                        if vec_norm > max_norm:
+                            model.steering_vector.data.mul_(max_norm / (vec_norm + 1e-8))
             else:
-                # 🌟 环境安全，清理 steering_vector，直接放行原始动作！
                 model.steering_vector.data.zero_()
         with torch.no_grad():
             predicted = model(  # fix this noqa!!!
