@@ -266,7 +266,7 @@ def eval_rollout(
 
                 with torch.enable_grad():
                     model.steering_vector.requires_grad = True
-                    optimizer = torch.optim.Adam([model.steering_vector], lr=0.002)
+                    optimizer = torch.optim.Adam([model.steering_vector], lr=0.005)
 
                     for _ in range(3):
                         optimizer.zero_grad()
@@ -281,28 +281,85 @@ def eval_rollout(
                         action_preds = preds[0]
                         curr_act = action_preds.mean[0, -1] if use_stochastic else action_preds[0, -1]
 
-                        # A. 奖励导向优化
+                        # A. 内部奖励温和引导
                         if model.predict_reward and preds[1] is not None:
-                            if not env_is_poisoned:
-                                steer_loss -= preds[1][0, -1].mean()
+                            steer_loss -= preds[1][0, -1].mean() * 0.1
 
-                        # B. 🌟 绝对公平的锚点平滑 (固定权重)
-                        # 为了消融实验的严谨性，统一向第一直觉对齐
-                        steer_loss += F.mse_loss(curr_act, clean_curr_act.detach()) * 0.5
+                        # B. 基础策略锚点平滑
+                        steer_loss += F.mse_loss(curr_act, clean_curr_act.detach()) * 0.2
 
-                        # C. 物理流形引力 (如果开启)
+                        # C. 相对物理流形约束 (解除内耗的 Koopman 引力橡皮筋)
                         if model.use_koopman:
-                            steer_shift = model.koopman.B(curr_act.unsqueeze(0))
-                            steer_loss += torch.norm(steer_shift) * 0.05
+                            shift_steered = model.koopman.B(curr_act.unsqueeze(0))
+                            shift_clean = model.koopman.B(clean_curr_act.detach().unsqueeze(0))
+                            steer_loss += torch.norm(shift_steered - shift_clean) * 0.5
 
                         steer_loss.backward(retain_graph=True)
                         optimizer.step()
 
-                        # D. L2 信任域球面投影
-                        max_norm = 0.04
-                        vec_norm = torch.norm(model.steering_vector.data)
-                        if vec_norm > max_norm:
-                            model.steering_vector.data.mul_(max_norm / (vec_norm + 1e-8))
+                        # D. 绝对纯净的动态授权截断 (Koopman 是唯一破壁钥匙)
+                        base_norm = 0.04
+                        max_norm = base_norm  # 默认死锁在 0.04 (保证纯 ASTS 消融公平性)
+
+                        if model.use_koopman:
+                            dynamic_shift = model.koopman.B(clean_curr_act.unsqueeze(0))
+                            shift_val = torch.norm(dynamic_shift).item()
+                            max_norm = min(0.25, base_norm + shift_val * 0.8)
+
+                        vec_norm_val = torch.norm(model.steering_vector.data).item()
+                        if vec_norm_val > max_norm:
+                            model.steering_vector.data.mul_(max_norm / (vec_norm_val + 1e-8))
+
+                # ============================================================
+                # 🌟 E. 终极防线：MPC 动态线搜索 (Model-Predictive Line Search)
+                # ============================================================
+                raw_steering_vec = model.steering_vector.data[0, 0, :].clone()
+                best_scale = 0.0
+
+                if model.predict_reward:
+                    with torch.no_grad():
+                        # --- 1. 获取基线分数 ---
+                        hypo_actions_clean = actions[:, : step + 1][:, -model.seq_len:].clone()
+                        hypo_actions_clean[0, -1] = clean_curr_act
+
+                        preds_eval_clean = model(
+                            states[:, : step + 1][:, -model.seq_len:],
+                            hypo_actions_clean,
+                            returns[:, : step + 1][:, -model.seq_len:],
+                            time_steps[:, : step + 1][:, -model.seq_len:],
+                        )
+                        reward_clean = preds_eval_clean[1][0, -1].item() if preds_eval_clean[1] is not None else 0.0
+
+                        # --- 2. MPC 动态探测完美 Norm ---
+                        search_scales = [1.0, 0.5, 0.25, 0.1]
+
+                        for scale in search_scales:
+                            test_action = clean_curr_act + raw_steering_vec * scale
+
+                            if torch.norm(test_action - clean_curr_act).item() > 0.4:
+                                continue
+
+                            hypo_actions_steered = actions[:, : step + 1][:, -model.seq_len:].clone()
+                            hypo_actions_steered[0, -1] = test_action
+
+                            preds_eval_steered = model(
+                                states[:, : step + 1][:, -model.seq_len:],
+                                hypo_actions_steered,
+                                returns[:, : step + 1][:, -model.seq_len:],
+                                time_steps[:, : step + 1][:, -model.seq_len:],
+                            )
+                            reward_steered = preds_eval_steered[1][0, -1].item() if preds_eval_steered[
+                                                                                        1] is not None else 0.0
+
+                            if reward_steered >= reward_clean - 0.02:
+                                best_scale = scale
+                                break
+
+                else:
+                    best_scale = 1.0 if torch.norm(raw_steering_vec).item() <= 0.4 else 0.0
+
+                model.steering_vector.data.zero_()
+                model.steering_vector.data[0, 0, :] = raw_steering_vec * best_scale
             else:
                 model.steering_vector.data.zero_()
         with torch.no_grad():
