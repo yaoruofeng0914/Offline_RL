@@ -103,6 +103,8 @@ for group in "${ABLATIONS[@]}"; do
                         --env "$env" \
                         --corruption_mode "$mode" \
                         --corruption_tag "$tag" \
+                        --corruption_rate 0.3 \
+                        --eval_attack True \
                         --group "$GROUP_NAME" \
                         --logdir "$BASE_LOGDIR" \
                         --save_model True \

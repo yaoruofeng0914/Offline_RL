@@ -167,6 +167,7 @@ class SequenceDataset:
 
 # Training and evaluation logic
 # @torch.no_grad()
+# @torch.no_grad()
 def eval_rollout(
         model: nn.Module,
         env: gym.Env,
@@ -219,12 +220,11 @@ def eval_rollout(
                 clean_curr_act = clean_action_preds.mean[0, -1] if use_stochastic else clean_action_preds[0, -1]
 
             # =================================================================
-            # 🌟 1. 双核正交触发器 (Dual-Core Orthogonal Trigger)
+            # 🌟 1. 触发器重构：多模态融合验证
             # =================================================================
-            trigger_asts = False
+            trigger_asts = env_is_poisoned
 
-            # [基础防御层] 纯统计驱动的滑动窗口 Z-Score 异常检测 (全局常驻，保障基线公平)
-            if step > 0:
+            if not trigger_asts and step > 0:
                 current_state_drift = torch.norm(states[:, step] - states[:, step - 1]).item()
                 current_action_drift = torch.norm(clean_curr_act - actions[:, step - 1]).item()
 
@@ -240,22 +240,23 @@ def eval_rollout(
                 if window_size >= 3:
                     state_mu = hist_state_drifts[:-1].mean().item()
                     state_std = hist_state_drifts[:-1].std().item() + 1e-5
-
                     act_mu = hist_act_drifts[:-1].mean().item()
                     act_std = hist_act_drifts[:-1].std().item() + 1e-5
 
                     state_z = (current_state_drift - state_mu) / state_std
                     act_z = (current_action_drift - act_mu) / act_std
 
-                    # 只要发生统计学突变，激活 ASTS
-                    if state_z > 3.0 and act_z > 2.0:
+                    if state_z > 2.5 and act_z > 1.5:
                         trigger_asts = True
 
-            # [高级防御层] Koopman 物理流形绝对报警
-            if model.use_koopman:
-                dynamic_shift = model.koopman.B(clean_curr_act.unsqueeze(0))
-                # 即使统计学未发现异常，只要违反物理流形，强制激活 ASTS
-                if torch.norm(dynamic_shift).item() > 0.15:
+            if not trigger_asts and model.use_koopman and step > 0:
+                shift_current = model.koopman.B(clean_curr_act.unsqueeze(0))
+                shift_prev = model.koopman.B(actions[:, step - 1].unsqueeze(0))
+
+                shift_diff = torch.norm(shift_current - shift_prev).item()
+                shift_baseline = torch.norm(shift_prev).item()
+
+                if shift_diff > (shift_baseline * 1.5 + 0.01):
                     trigger_asts = True
 
             # =================================================================
@@ -281,14 +282,11 @@ def eval_rollout(
                         action_preds = preds[0]
                         curr_act = action_preds.mean[0, -1] if use_stochastic else action_preds[0, -1]
 
-                        # A. 内部奖励温和引导
                         if model.predict_reward and preds[1] is not None:
                             steer_loss -= preds[1][0, -1].mean() * 0.1
 
-                        # B. 基础策略锚点平滑
                         steer_loss += F.mse_loss(curr_act, clean_curr_act.detach()) * 0.2
 
-                        # C. 相对物理流形约束 (解除内耗的 Koopman 引力橡皮筋)
                         if model.use_koopman:
                             shift_steered = model.koopman.B(curr_act.unsqueeze(0))
                             shift_clean = model.koopman.B(clean_curr_act.detach().unsqueeze(0))
@@ -297,9 +295,8 @@ def eval_rollout(
                         steer_loss.backward(retain_graph=True)
                         optimizer.step()
 
-                        # D. 绝对纯净的动态授权截断 (Koopman 是唯一破壁钥匙)
                         base_norm = 0.04
-                        max_norm = base_norm  # 默认死锁在 0.04 (保证纯 ASTS 消融公平性)
+                        max_norm = base_norm
 
                         if model.use_koopman:
                             dynamic_shift = model.koopman.B(clean_curr_act.unsqueeze(0))
@@ -311,14 +308,14 @@ def eval_rollout(
                             model.steering_vector.data.mul_(max_norm / (vec_norm_val + 1e-8))
 
                 # ============================================================
-                # 🌟 E. 终极防线：MPC 动态线搜索 (Model-Predictive Line Search)
+                # 🌟 3. MPC 潜空间线搜索 (修复维度映射冲突)
                 # ============================================================
                 raw_steering_vec = model.steering_vector.data[0, 0, :].clone()
                 best_scale = 0.0
 
                 if model.predict_reward:
                     with torch.no_grad():
-                        # --- 1. 获取基线分数 ---
+                        model.steering_vector.data.zero_()
                         hypo_actions_clean = actions[:, : step + 1][:, -model.seq_len:].clone()
                         hypo_actions_clean[0, -1] = clean_curr_act
 
@@ -330,33 +327,37 @@ def eval_rollout(
                         )
                         reward_clean = preds_eval_clean[1][0, -1].item() if preds_eval_clean[1] is not None else 0.0
 
-                        # --- 2. MPC 动态探测完美 Norm ---
                         search_scales = [1.0, 0.5, 0.25, 0.1]
-
                         for scale in search_scales:
-                            test_action = clean_curr_act + raw_steering_vec * scale
+                            model.steering_vector.data[0, 0, :] = raw_steering_vec * scale
 
-                            if torch.norm(test_action - clean_curr_act).item() > 0.4:
+                            steered_preds = model(
+                                states[:, : step + 1][:, -model.seq_len:],
+                                actions[:, : step + 1][:, -model.seq_len:],
+                                returns[:, : step + 1][:, -model.seq_len:],
+                                time_steps[:, : step + 1][:, -model.seq_len:],
+                            )
+                            test_act = steered_preds[0].mean[0, -1] if use_stochastic else steered_preds[0][0, -1]
+
+                            if torch.norm(test_act - clean_curr_act).item() > 0.4:
                                 continue
 
                             hypo_actions_steered = actions[:, : step + 1][:, -model.seq_len:].clone()
-                            hypo_actions_steered[0, -1] = test_action
+                            hypo_actions_steered[0, -1] = test_act
 
-                            preds_eval_steered = model(
+                            eval_steered = model(
                                 states[:, : step + 1][:, -model.seq_len:],
                                 hypo_actions_steered,
                                 returns[:, : step + 1][:, -model.seq_len:],
                                 time_steps[:, : step + 1][:, -model.seq_len:],
                             )
-                            reward_steered = preds_eval_steered[1][0, -1].item() if preds_eval_steered[
-                                                                                        1] is not None else 0.0
+                            reward_steered = eval_steered[1][0, -1].item() if eval_steered[1] is not None else 0.0
 
                             if reward_steered >= reward_clean - 0.02:
                                 best_scale = scale
                                 break
-
                 else:
-                    best_scale = 1.0 if torch.norm(raw_steering_vec).item() <= 0.4 else 0.0
+                    best_scale = 1.0 if torch.norm(raw_steering_vec).item() <= 0.04 else 0.0
 
                 model.steering_vector.data.zero_()
                 model.steering_vector.data[0, 0, :] = raw_steering_vec * best_scale
