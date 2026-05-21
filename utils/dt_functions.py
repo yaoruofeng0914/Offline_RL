@@ -14,7 +14,7 @@ from tqdm.auto import trange  # noqa
 from networks import MLPBlock, ResidualBlock, TransformerBlock, DiagGaussianActor
 from attack import attack_dataset, Evaluation_Attacker
 from logger import Logger
-
+import gc
 
 # some utils functionalities specific for Decision Transformer
 def pad_along_axis(
@@ -204,7 +204,9 @@ def eval_rollout(
     # cannot step higher than model episode len, as timestep embeddings will crash
     episode_return, episode_len = 0.0, 0.0
     env_is_poisoned = False
+    ema_kpe_ratio = 1.0
     for step in range(model.episode_len):
+        hist_kpe = 0.5
         # first select history up to step, then select last seq_len states,
         # step + 1 as : operator is not inclusive, last action is dummy with zeros
         # (as model will predict last, actual last values are not important)
@@ -224,52 +226,77 @@ def eval_rollout(
             # =================================================================
             trigger_asts = env_is_poisoned
 
-            if not trigger_asts and step > 0:
-                current_state_drift = torch.norm(states[:, step] - states[:, step - 1]).item()
-                current_action_drift = torch.norm(clean_curr_act - actions[:, step - 1]).item()
-
-                window_size = min(step, 5)
-                start_idx = step - window_size
-
-                historical_states = states[:, start_idx:step + 1]
-                historical_actions = actions[:, start_idx:step + 1]
-
-                hist_state_drifts = torch.norm(historical_states[:, 1:] - historical_states[:, :-1], dim=-1)[0]
-                hist_act_drifts = torch.norm(historical_actions[:, 1:] - historical_actions[:, :-1], dim=-1)[0]
-
-                if window_size >= 3:
-                    state_mu = hist_state_drifts[:-1].mean().item()
-                    state_std = hist_state_drifts[:-1].std().item() + 1e-5
-                    act_mu = hist_act_drifts[:-1].mean().item()
-                    act_std = hist_act_drifts[:-1].std().item() + 1e-5
-
-                    state_z = (current_state_drift - state_mu) / state_std
-                    act_z = (current_action_drift - act_mu) / act_std
-
-                    if state_z > 2.5 and act_z > 1.5:
-                        trigger_asts = True
-
             if not trigger_asts and model.use_koopman and step > 0:
-                shift_current = model.koopman.B(clean_curr_act.unsqueeze(0))
-                shift_prev = model.koopman.B(actions[:, step - 1].unsqueeze(0))
+                # 1. 过去状态的真实流形 (去掉多余维度，保证矩阵乘法安全: [1, hidden_dim])
+                g_prev = model.koopman.g(states[:, step - 1]).squeeze(0)
+                # 2. 当前状态的真实流形
+                g_curr = model.koopman.g(states[:, step]).squeeze(0)
 
-                shift_diff = torch.norm(shift_current - shift_prev).item()
-                shift_baseline = torch.norm(shift_prev).item()
+                # 3. Koopman 基于物理法则外推的当前流形
+                action_prev = actions[:, step - 1].squeeze(0)
+                g_curr_pred = torch.matmul(g_prev, model.koopman.K) + model.koopman.B(action_prev)
 
-                if shift_diff > (shift_baseline * 1.5 + 0.01):
+                # 4. 计算 Koopman 流形预测误差 (KPE)
+                kpe_error = torch.norm(g_curr - g_curr_pred).item()
+
+                # 5. 动态环境基准：不要用写死的 0.5。计算过去几步的平滑误差作为基线。
+
+                if step > 2:
+                    g_hist_prev = model.koopman.g(states[:, max(0, step - 5):step - 1])  # [1, T, hidden]
+                    g_hist_curr = model.koopman.g(states[:, max(1, step - 4):step])
+                    a_hist_prev = actions[:, max(0, step - 5):step - 1]
+
+                    g_hist_pred = torch.matmul(g_hist_prev, model.koopman.K) + model.koopman.B(a_hist_prev)
+                    hist_kpe = torch.norm(g_hist_curr - g_hist_pred, dim=-1).mean().item()
+
+                    # 如果当前瞬间误差，超过历史平滑误差的 2.5 倍（且有绝对下限），说明流形被黑客撕裂了！
+                    base_kpe = max(hist_kpe * 2.5, 0.2)
+                else:
+                    base_kpe = 0.5
+
+                if kpe_error > base_kpe:
                     trigger_asts = True
 
+            # =================================================================
+            # 🌟 2. 带有 L2 信任域和自我锚点的优化器 (TR-ASTS)
+            # =================================================================
             # =================================================================
             # 🌟 2. 带有 L2 信任域和自我锚点的优化器 (TR-ASTS)
             # =================================================================
             if trigger_asts:
                 model.steering_vector.data.zero_()
 
+                # 🌟 将 max_norm 的计算提出来！保证每个物理 step 只更新一次阻尼状态！
+                if model.use_koopman and step > 2:
+                    # 1. 提取当前瞬态 KPE 与 历史平滑 KPE
+                    instant_kpe = kpe_error if 'kpe_error' in locals() else 0.5
+                    smoothed_kpe = hist_kpe
+
+                    # 2. 计算无量纲比值 R_t (Scale Invariance)
+                    raw_ratio = instant_kpe / (smoothed_kpe + 1e-6)
+
+                    # 3. 一阶低通阻尼滤波 (Absorbing Spikes)
+                    lam = 0.2
+                    ema_kpe_ratio = (1 - lam) * ema_kpe_ratio + lam * raw_ratio
+
+                    # 4. 指数弹性边界计算
+                    alpha = 0.4  # SAM 护城河带来的底气：平坦流形下的极大宽容度
+                    beta = 1.5   # 对恶性撕裂攻击的敏感衰减因子
+
+                    penalty_factor = max(0.0, ema_kpe_ratio - 1.0)
+                    dynamic_upper = alpha * np.exp(-beta * penalty_factor)
+
+                    # 5. 守住绝对防线
+                    max_norm = max(0.05, dynamic_upper)
+                else:
+                    # 开局或无 Koopman 时的后备保守策略
+                    max_norm = 0.1
+
                 with torch.enable_grad():
                     model.steering_vector.requires_grad = True
                     optimizer = torch.optim.Adam([model.steering_vector], lr=0.005)
 
-                    for _ in range(3):
+                    for i_step in range(3):
                         optimizer.zero_grad()
                         preds = model(
                             states[:, : step + 1][:, -model.seq_len:],
@@ -292,20 +319,15 @@ def eval_rollout(
                             shift_clean = model.koopman.B(clean_curr_act.detach().unsqueeze(0))
                             steer_loss += torch.norm(shift_steered - shift_clean) * 0.5
 
-                        steer_loss.backward(retain_graph=True)
+                        steer_loss.backward(retain_graph=(i_step < 2))
                         optimizer.step()
 
-                        base_norm = 0.04
-                        max_norm = base_norm
-
-                        if model.use_koopman:
-                            dynamic_shift = model.koopman.B(clean_curr_act.unsqueeze(0))
-                            shift_val = torch.norm(dynamic_shift).item()
-                            max_norm = min(0.25, base_norm + shift_val * 0.8)
-
+                        # 🌟 投影截断保留在循环内，每次梯度走完都检查是否越界
                         vec_norm_val = torch.norm(model.steering_vector.data).item()
                         if vec_norm_val > max_norm:
                             model.steering_vector.data.mul_(max_norm / (vec_norm_val + 1e-8))
+
+                    del steer_loss, action_preds, preds, curr_act
 
                 # ============================================================
                 # 🌟 3. MPC 潜空间线搜索 (修复维度映射冲突)
@@ -439,41 +461,155 @@ def eval_fn(config, env, model, eval_attacker=None):
             f"eval/{target_return}_normalized_score_mean": np.mean(normalized_score),
             f"eval/{target_return}_normalized_score_std": np.std(normalized_score),
         })
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     return eval_log
+# ==========================================
+# 🌟 极简且标准的 SAM 优化器实现
+# ==========================================
+class SAM(torch.optim.Optimizer):
+    def __init__(self, params, base_optimizer, rho=0.05, adaptive=False, **kwargs):
+        assert rho >= 0.0, f"Invalid rho, should be non-negative: {rho}"
+        defaults = dict(rho=rho, adaptive=adaptive, **kwargs)
+        super(SAM, self).__init__(params, defaults)
+        self.base_optimizer = base_optimizer(self.param_groups, **kwargs)
+        self.param_groups = self.base_optimizer.param_groups
+
+    @torch.no_grad()
+    def first_step(self, zero_grad=False):
+        grad_norm = self._grad_norm()
+        for group in self.param_groups:
+            scale = group["rho"] / (grad_norm + 1e-12)
+            for p in group["params"]:
+                if p.grad is None: continue
+                e_w = (torch.pow(p, 2) if group["adaptive"] else 1.0) * p.grad * scale.to(p)
+                p.add_(e_w)  # 爬上恶劣的锐度山峰
+                self.state[p]["e_w"] = e_w
+        if zero_grad: self.zero_grad()
+
+    @torch.no_grad()
+    def second_step(self, zero_grad=False):
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None: continue
+                p.sub_(self.state[p]["e_w"])  # 退回原位，但在原位使用山峰上的梯度更新
+        self.base_optimizer.step()
+        if zero_grad: self.zero_grad()
+
+    def _grad_norm(self):
+        shared_device = self.param_groups[0]["params"][0].device
+        norm = torch.norm(
+            torch.stack([
+                ((torch.abs(p) if group["adaptive"] else 1.0) * p.grad).norm(p=2).to(shared_device)
+                for group in self.param_groups for p in group["params"]
+                if p.grad is not None
+            ]),
+            p=2
+        )
+        return norm
 
 
-# --- 创新点 1: 多尺度小波池化注意力 (MWPA) ---
-class WaveletFeatureEnhancer(nn.Module):
-    def __init__(self, embed_dim, kernel_size=2):  # 🌟 不要 lambd 参数了
+# ==========================================
+# 🌟 创新点 1 (重构版): 基于 SWT 的双通道频域交叉注意力融合 (WFDiffuser 范式)
+# 完全可微分，不丢失高频的物理特征，利用因果门控进行自主防守
+# ==========================================
+class DifferentiableSWT(nn.Module):
+    """
+    可微分的平稳小波变换 (Stationary Wavelet Transform, SWT)
+    基于 Haar 小波，使用不可训练的 1D 卷积实现，支持 GPU 加速和 autograd
+    保证输出的时间分辨率与输入完全一致 (无下采样)
+    """
+
+    def __init__(self, channels):
         super().__init__()
-        self.kernel_size = kernel_size
-        self.low_freq = nn.Conv1d(embed_dim, embed_dim, kernel_size=kernel_size, padding=0, groups=embed_dim)
+        # Haar 小波滤波器系数
+        h0 = np.array([1, 1]) / np.sqrt(2)  # 低通
+        h1 = np.array([-1, 1]) / np.sqrt(2)  # 高通
 
-        self.gain = nn.Parameter(torch.zeros(1))
-        self.proj = nn.Linear(embed_dim, embed_dim)
+        # 构造卷积核 [channels, 1, 2] 用于 Depthwise Conv
+        weight_low = torch.tensor(h0, dtype=torch.float32).view(1, 1, 2).repeat(channels, 1, 1)
+        weight_high = torch.tensor(h1, dtype=torch.float32).view(1, 1, 2).repeat(channels, 1, 1)
+
+        self.register_buffer('weight_low', weight_low)
+        self.register_buffer('weight_high', weight_high)
+        self.channels = channels
 
     def forward(self, x):
-        # x: [B, T, C]
-        identity = x
-        x_transpose = x.transpose(1, 2)  # [B, C, T]
+        # x: [Batch, Length, Channels]
+        x_t = x.transpose(1, 2)  # [B, C, L]
+        seq_len = x_t.size(-1)
 
-        # 1. 提取低频趋势 (平滑后的状态)
-        # 🌟 动态因果补零！
-        x_pad_low = F.pad(x_transpose, (self.kernel_size - 1, 0))
-        low = self.low_freq(x_pad_low)
+        # 动态获取卷积核长度
+        kernel_size = self.weight_low.size(-1)
 
-        # 2. 提取细节分量 (原信号 - 低频 = 高频细节)
-        detail = x_transpose - low
+        # 极其鲁棒的因果补零：在左侧补 (kernel_size - 1) 个零
+        x_pad = F.pad(x_t, (kernel_size - 1, 0), mode='constant', value=0.0)
 
-        # 3. 软阈值处理 (自适应去噪)
-        # 🌟 阈值调小为 0.005
-        detail = F.softshrink(detail, lambd=0.005)
+        # Depthwise 1D 卷积分别提取低频 (趋势) 和高频 (细节)
+        x_low = F.conv1d(x_pad, self.weight_low, groups=self.channels)
+        x_high = F.conv1d(x_pad, self.weight_high, groups=self.channels)
 
-        # 4. 多尺度融合
-        combined = (low + detail).transpose(1, 2)
+        # 终极保险：强制截取前 seq_len 个时间步，确保维度绝对对齐
+        x_low = x_low[..., :seq_len]
+        x_high = x_high[..., :seq_len]
 
-        # 5. 残差连接：x = x + gain * 增强特征
-        return identity + self.gain * self.proj(combined)
+        return x_low.transpose(1, 2), x_high.transpose(1, 2)  # [B, L, C], [B, L, C]
+
+
+class GatedCrossFrequencyInjection(nn.Module):
+    """
+    门控频域交叉融合机制：让主干低频 (宏观动力学) 去 Query 高频细节 (专家微操)。
+    合法的物理突发将被引入，恶意的对抗噪声将被门控阻断。
+    """
+
+    def __init__(self, embed_dim, num_heads=4, dropout=0.1):
+        super().__init__()
+        self.swt = DifferentiableSWT(embed_dim)
+
+        # 交叉注意力：Low freq (Query), High freq (Key, Value)
+        self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
+        self.layer_norm1 = nn.LayerNorm(embed_dim)
+
+        # 非线性门控网络 (决定高频注入的比例)
+        self.gating_network = nn.Sequential(
+            nn.Linear(embed_dim * 2, embed_dim),
+            nn.SiLU(),
+            nn.Linear(embed_dim, embed_dim),
+            nn.Sigmoid()
+        )
+
+        # FFN 融合后处理
+        self.ffn = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 4),
+            nn.GELU(),
+            nn.Linear(embed_dim * 4, embed_dim)
+        )
+        self.layer_norm2 = nn.LayerNorm(embed_dim)
+
+    def forward(self, x):
+        # 1. 频域无损分解
+        x_low, x_high = self.swt(x)
+
+        # 2. 交叉注意力：低频宏观状态 验证 高频细节
+        # 因果掩码防止看未来
+        seq_len = x.size(1)
+        causal_mask = torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device), diagonal=1)
+
+        # attn_output 包含了被低频验证通过的“合法高频信息”
+        attn_output, _ = self.cross_attn(
+            query=x_low, key=x_high, value=x_high,
+            need_weights=False, is_causal=True, attn_mask=causal_mask
+        )
+
+        # 3. 门控机制：动态决定注入多少高频特征
+        gate = self.gating_network(torch.cat([x_low, attn_output], dim=-1))
+        injected_features = x_low + gate * attn_output
+        injected_features = self.layer_norm1(injected_features)
+
+        # 4. FFN 增强与残差
+        out = injected_features + self.ffn(injected_features)
+        return self.layer_norm2(out)
 # --- 创新点 2: 对比 Koopman 流形模块 ---
 class ContrastiveKoopman(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=128):
@@ -557,11 +693,11 @@ class DecisionTransformer(nn.Module):
 
             ]
         )
+        # 🌟 核心替换：使用频域交叉融合机制替代原有的硬截断滤波
         if self.use_mwpa:
-            # 🌟 S和A用小核敏锐捕捉，R用大核低通滤波。没有额外的 lambd 传参。
-            self.wavelet_S = WaveletFeatureEnhancer(embedding_dim, kernel_size=2)
-            self.wavelet_A = WaveletFeatureEnhancer(embedding_dim, kernel_size=2)
-            self.wavelet_R = WaveletFeatureEnhancer(embedding_dim, kernel_size=4)
+            self.freq_fusion_S = GatedCrossFrequencyInjection(embedding_dim, num_heads=4)
+            self.freq_fusion_A = GatedCrossFrequencyInjection(embedding_dim, num_heads=4)
+            self.freq_fusion_R = GatedCrossFrequencyInjection(embedding_dim, num_heads=4)
         if self.use_koopman:
             self.koopman = ContrastiveKoopman(state_dim, action_dim, embedding_dim)
 
@@ -657,9 +793,10 @@ class DecisionTransformer(nn.Module):
         act_emb = self.action_emb(actions)
         returns_emb = self.return_emb(returns_to_go)
         if self.use_mwpa:
-            state_emb = self.wavelet_S(state_emb)
-            act_emb = self.wavelet_A(act_emb)
-            returns_emb = self.wavelet_R(returns_emb)
+            # 使用频域交叉验证融合替代硬截断
+            state_emb = self.freq_fusion_S(state_emb)
+            act_emb = self.freq_fusion_A(act_emb)
+            returns_emb = self.freq_fusion_R(returns_emb)
         # [batch_size, seq_len * 3, emb_dim], (r_0, s_0, a_0, r_1, s_1, a_1, ...)
         if self.embed_order == "rsa":
             sequence = torch.stack([returns_emb, state_emb, act_emb], dim=1)

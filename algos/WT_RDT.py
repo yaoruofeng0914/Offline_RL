@@ -234,6 +234,11 @@ class TrainConfig:
             self.update_steps = int(self.num_epochs * self.num_updates_on_epoch)
             self.warmup_steps = int(0.1 * self.update_steps)
             self.decay_steps = int(0.1 * self.update_steps)
+
+            self.embedding_dropout = 0.0
+            self.loss_fn = "mse"
+            self.wmse_coef = (0.0, 0.0)
+            self.correct_thershold = None
         # evaluation
         # if self.eval_only:
         # assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
@@ -386,7 +391,10 @@ def compute_loss(config, model, batch):
         # 🌟 恢复为二分类交叉熵 (只推开高斯噪声，绝不撕裂尺度)
         loss_k = F.cross_entropy(logits.view(-1, 2), labels)
 
-        loss += config.koopman_coef * loss_k
+        loss_spectral = torch.norm(model.koopman.K, p=2)
+
+        # 把谱惩罚加进总 loss，系数给 0.01
+        loss += config.koopman_coef * loss_k + 0.01 * loss_spectral
         log_dict.update({"loss_koopman": loss_k.item()})
 
     data_info = None
@@ -433,16 +441,34 @@ def train(config: TrainConfig, logger: Logger):
     # logger.info(f"Network: \n{str(model)}")
     logger.info(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
 
-    # optimizer
-    optim = torch.optim.AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=config.learning_rate,
-        weight_decay=config.weight_decay,
-        betas=config.betas,
+    # =================================================================
+    # 🌟 核心改造 1: 双轨优化器 (Dual-Track Optimizers)
+    # =================================================================
+    # 1. 拆分参数
+    head_params = list(model.action_head.parameters())
+    backbone_params = [p for n, p in model.named_parameters() if 'action_head' not in n and p.requires_grad]
+
+    # 2. 动作头的 SAM 优化器 (使用 try-except 保持容错)
+    try:
+        optim_sam = dt_func.SAM(
+            head_params, torch.optim.AdamW, rho=0.05,
+            lr=config.learning_rate, weight_decay=config.weight_decay, betas=config.betas
+        )
+        is_using_sam = True
+    except AttributeError:
+        optim_sam = torch.optim.AdamW(
+            head_params, lr=config.learning_rate, weight_decay=config.weight_decay, betas=config.betas
+        )
+        is_using_sam = False
+
+    # 3. 主干网络的 AdamW 优化器
+    optim_backbone = torch.optim.AdamW(
+        backbone_params, lr=config.learning_rate, weight_decay=config.weight_decay, betas=config.betas
     )
+
+    # 4. 调度器绑定到主干优化器
     scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optim,
-        lambda steps: min((steps + 1) / config.warmup_steps, 1),
+        optim_backbone, lambda steps: min((steps + 1) / config.warmup_steps, 1)
     )
 
     data_dist = []
@@ -471,29 +497,100 @@ def train(config: TrainConfig, logger: Logger):
             logger.record(k, v)
         logger.dump(0)
 
-    # if config.use_wandb:
-    #     wandb.log({"epoch": 0, **eval_log})
-
     total_updates = 0
     best_score = -np.inf
     best_score_50 = -np.inf
-    # trainloader_iter = iter(trainloader)
     for epoch in trange(1, config.num_epochs + 1, desc="Training"):
         time_start = time.time()
         for step in trange(config.num_updates_on_epoch, desc="Epoch", leave=False):
-            # batch = next(trainloader_iter)
             batch = dataset.get_batch(config.batch_size, config.recalculate_return)
             config.recalculate_return = False
+            # =================================================================
+            # 🌟 核心改造 2: Selective-SAM 的混合梯度更新逻辑 (绝对安全版)
+            # =================================================================
+            optim_sam.zero_grad()
+            optim_backbone.zero_grad()
 
-            optim.zero_grad()
+            # 第 1 次前向传播：正常计算整个网络的梯度
             loss, log_dict, debug_dict, data_info = compute_loss(config, model, batch)
-            loss.backward()
+            loss.backward(retain_graph=is_using_sam)
+
+            # --- 主干网络: 安全更新 ---
             if config.clip_grad is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_grad)
-            optim.step()
+                torch.nn.utils.clip_grad_norm_(backbone_params, config.clip_grad)
+            optim_backbone.step()
+
+            if is_using_sam:
+                # --- Action Head (SAM): 走第一步，寻找锐度最恶劣的微小扰动 ---
+                if config.clip_grad is not None:
+                    torch.nn.utils.clip_grad_norm_(head_params, config.clip_grad)
+                optim_sam.first_step(zero_grad=True)
+
+                # 第 2 次前向传播：为了防止主干网络二次求导报错，我们手动剥离它
+                # 我们只关心 action_head 上的 SAM 优化，所以先固定主干特征
+                states, actions, returns, rewards, time_steps, mask, attack_mask, traj_indexs = [b.to(config.device) for
+                                                                                                 b in batch]
+                padding_mask = ~mask.to(torch.bool)
+
+                # 让主干网络不产生梯度
+                with torch.no_grad():
+                    time_emb = model.timestep_emb(time_steps)
+                    state_emb = model.koopman.g(states) if model.use_koopman else model.state_emb(states)
+                    act_emb = model.action_emb(actions)
+                    returns_emb = model.return_emb(returns)
+
+                    if model.use_mwpa:
+                        state_emb = model.freq_fusion_S(state_emb)
+                        act_emb = model.freq_fusion_A(act_emb)
+                        returns_emb = model.freq_fusion_R(returns_emb)
+
+                    if model.embed_order == "rsa":
+                        sequence = torch.stack([returns_emb, state_emb, act_emb], dim=1)
+                    elif model.embed_order == "sar":
+                        sequence = torch.stack([state_emb, act_emb, returns_emb], dim=1)
+
+                    batch_size, seq_len = states.shape[0], states.shape[1]
+                    sequence = sequence.permute(0, 2, 1, 3).reshape(batch_size, 3 * seq_len, model.embedding_dim)
+                    sequence = sequence + time_emb.repeat_interleave(3, dim=1)
+
+                    pad_mask_stack = torch.stack([padding_mask, padding_mask, padding_mask], dim=1).permute(0, 2,
+                                                                                                            1).reshape(
+                        batch_size, 3 * seq_len)
+                    out = model.emb_norm(sequence)
+                    if hasattr(model, "emb_drop"): out = model.emb_drop(out)
+                    for block in model.blocks:
+                        out = block(out, padding_mask=pad_mask_stack)
+                    out = model.out_norm(out)
+                    out = model.predict_dropout(out)
+
+                    if model.embed_order == "rsa":
+                        out_s_emb = out[:, 1::3]
+                    elif model.embed_order == "sar":
+                        out_s_emb = out[:, 0::3]
+
+                # 仅仅让 action_head 参与二次前向传播，计算损失
+                predicted_actions = model.action_head(out_s_emb.detach())  # 注意 detach，彻底切断反向传播到主干
+
+                # 手动计算 action_head 的 wmse 损失
+                loss_2_act = loss_fn(config, predicted_actions, actions, mask, config.wmse_coef[0])
+
+                loss_2_act.backward()
+
+                # --- Action Head (SAM): 走第二步，完成内生平滑更新 ---
+                if config.clip_grad is not None:
+                    torch.nn.utils.clip_grad_norm_(head_params, config.clip_grad)
+                optim_sam.second_step(zero_grad=True)
+
+            else:
+                # Fallback: 普通更新
+                if config.clip_grad is not None:
+                    torch.nn.utils.clip_grad_norm_(head_params, config.clip_grad)
+                optim_sam.step()
+
             log_dict.update({"learning_rate": scheduler.get_last_lr()[0]})
             scheduler.step()
             total_updates += 1
+
             correct_dict = {}
             if config.correct_thershold is not None:
                 correct = epoch > config.correct_start and step % config.correct_freq == 0

@@ -1,7 +1,7 @@
 #!/bin/bash
 export PYTHONPATH=$PYTHONPATH:.
 export D4RL_SUPPRESS_IMPORT_ERROR=1  # 顺便屏蔽 D4RL 的报错刷屏
-BASE_DIR=~/Offline_RL/checkpoint4baseline
+BASE_DIR=~/Offline_RL/results/
 LOG_FILE="eval_progress.log"
 > "$LOG_FILE" # 清空旧日志
 
