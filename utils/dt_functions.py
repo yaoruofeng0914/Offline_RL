@@ -395,6 +395,8 @@ def eval_rollout(
             predicted_actions = predicted[0]
             if use_stochastic:
                 predicted_actions = predicted_actions.mean
+            if torch.isnan(predicted_actions[0, -1]).any() or torch.isinf(predicted_actions[0, -1]).any():
+                break
             predicted_action = predicted_actions[0, -1].cpu().numpy()
             if eval_attacker is not None and eval_attack_tag == "act":
                 attack_flag = np.random.rand()
@@ -571,13 +573,24 @@ class GatedCrossFrequencyInjection(nn.Module):
         self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
         self.layer_norm1 = nn.LayerNorm(embed_dim)
 
-        # 非线性门控网络 (决定高频注入的比例)
+        # KPE 条件映射：接收 [绝对KPE, 对数比值] 两维输入
+        self.kpe_condition = nn.Sequential(
+            nn.Linear(2, embed_dim),
+            nn.LayerNorm(embed_dim),
+            nn.SiLU()
+        )
+        nn.init.zeros_(self.kpe_condition[0].weight)
+        nn.init.zeros_(self.kpe_condition[0].bias)
+
+        # 门控网络：偏置初始化为 2.0，sigmoid 输出 ≈ 0.88
         self.gating_network = nn.Sequential(
-            nn.Linear(embed_dim * 2, embed_dim),
+            nn.Linear(embed_dim * 3, embed_dim),
             nn.SiLU(),
             nn.Linear(embed_dim, embed_dim),
             nn.Sigmoid()
         )
+        nn.init.normal_(self.gating_network[-2].weight, mean=0.0, std=0.02)
+        nn.init.constant_(self.gating_network[-2].bias, 2.0)
 
         # FFN 融合后处理
         self.ffn = nn.Sequential(
@@ -587,27 +600,30 @@ class GatedCrossFrequencyInjection(nn.Module):
         )
         self.layer_norm2 = nn.LayerNorm(embed_dim)
 
-    def forward(self, x):
-        # 1. 频域无损分解
+    def forward(self, x, kpe=None):
+        # 1. 频域分解
         x_low, x_high = self.swt(x)
 
-        # 2. 交叉注意力：低频宏观状态 验证 高频细节
-        # 因果掩码防止看未来
+        # 2. 交叉注意力（因果掩码）
         seq_len = x.size(1)
         causal_mask = torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device), diagonal=1)
-
-        # attn_output 包含了被低频验证通过的“合法高频信息”
         attn_output, _ = self.cross_attn(
             query=x_low, key=x_high, value=x_high,
             need_weights=False, is_causal=True, attn_mask=causal_mask
         )
 
-        # 3. 门控机制：动态决定注入多少高频特征
-        gate = self.gating_network(torch.cat([x_low, attn_output], dim=-1))
+        # 3. 处理 KPE 条件特征
+        if kpe is not None:
+            kpe_feat = self.kpe_condition(kpe)  # [B, L, embed_dim]
+        else:
+            kpe_feat = torch.zeros_like(x_low)
+
+        # 4. 动态门控（拼接三个信息源）
+        gate = self.gating_network(torch.cat([x_low, attn_output, kpe_feat], dim=-1))
         injected_features = x_low + gate * attn_output
         injected_features = self.layer_norm1(injected_features)
 
-        # 4. FFN 增强与残差
+        # 5. FFN + 残差
         out = injected_features + self.ffn(injected_features)
         return self.layer_norm2(out)
 # --- 创新点 2: 对比 Koopman 流形模块 ---
@@ -628,8 +644,10 @@ class ContrastiveKoopman(nn.Module):
     def forward(self, s_t, a_t, s_next):
         g_t = self.g(s_t)  # [B, T, hidden]
         g_next_true = self.g(s_next)
-
-        g_next_pred = g_t @ self.K + self.B(a_t) # 预测下一步应该在哪
+        # 谱范数有界化
+        k_norm = torch.norm(self.K, p='fro')
+        safe_K = self.K / torch.clamp(k_norm, min=1.0)
+        g_next_pred = g_t @ safe_K + self.B(a_t)
         return g_next_true, g_next_pred, g_t
 
 class DecisionTransformer(nn.Module):
@@ -786,6 +804,26 @@ class DecisionTransformer(nn.Module):
         time_emb = self.timestep_emb(time_steps)
         # act_emb = self.action_emb(actions)
         # returns_emb = self.return_emb(returns_to_go)
+        kpe_sequence = None
+        if self.use_koopman:
+            with torch.no_grad():
+                s_t = states[:, :-1, :]
+                a_t = actions[:, :-1, :]
+                s_next = states[:, 1:, :]
+                _, g_next_pred, _ = self.koopman(s_t, a_t, s_next)
+                g_next_true = self.koopman.g(s_next)
+                kpe_errors = torch.norm(g_next_pred - g_next_true, dim=-1)
+                kpe_sequence = F.pad(kpe_errors, (1, 0), value=0.0)
+
+                window = 3
+                kpe_padded = F.pad(kpe_sequence.unsqueeze(1), (window - 1, 0), mode='replicate')
+                smooth_kpe = F.avg_pool1d(kpe_padded, kernel_size=window, stride=1).squeeze(1)
+                smooth_kpe_safe = torch.clamp(smooth_kpe, min=1e-4)
+                log_ratio = torch.log1p(kpe_sequence) - torch.log1p(smooth_kpe_safe)
+                kpe_sequence = torch.clamp(kpe_sequence, max=100.0)
+                log_ratio = torch.clamp(log_ratio, min=-5.0, max=5.0)
+                kpe_sequence = torch.stack([kpe_sequence, log_ratio], dim=-1)
+
         if self.use_koopman:
             state_emb = self.koopman.g(states)
         else:
@@ -793,10 +831,9 @@ class DecisionTransformer(nn.Module):
         act_emb = self.action_emb(actions)
         returns_emb = self.return_emb(returns_to_go)
         if self.use_mwpa:
-            # 使用频域交叉验证融合替代硬截断
-            state_emb = self.freq_fusion_S(state_emb)
-            act_emb = self.freq_fusion_A(act_emb)
-            returns_emb = self.freq_fusion_R(returns_emb)
+            state_emb = self.freq_fusion_S(state_emb, kpe=kpe_sequence)
+            act_emb = self.freq_fusion_A(act_emb, kpe=kpe_sequence)
+            returns_emb = self.freq_fusion_R(returns_emb, kpe=kpe_sequence)
         # [batch_size, seq_len * 3, emb_dim], (r_0, s_0, a_0, r_1, s_1, a_1, ...)
         if self.embed_order == "rsa":
             sequence = torch.stack([returns_emb, state_emb, act_emb], dim=1)

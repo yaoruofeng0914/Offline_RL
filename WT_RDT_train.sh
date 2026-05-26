@@ -1,25 +1,25 @@
 #!/bin/bash
 ENVS=(
 "door-expert-v0"
-#"halfcheetah-medium-replay-v2"
-#"hammer-expert-v0"
-#"hopper-medium-replay-v2"
-#"kitchen-complete-v0"
-#"kitchen-mixed-v0"
-#"kitchen-partial-v0"
-#"relocate-expert-v0"
-#"walker2d-medium-replay-v2"
+"halfcheetah-medium-replay-v2"
+"hammer-expert-v0"
+"hopper-medium-replay-v2"
+"kitchen-complete-v0"
+"kitchen-mixed-v0"
+"kitchen-partial-v0"
+"relocate-expert-v0"
+"walker2d-medium-replay-v2"
 )
 MODES=(
 "random"
-#"adversarial"
+"adversarial"
 )
 
 TAGS=(
 "obs"
-#"act"
-#"rew"
-  )
+"act"
+"rew"
+)
 
 SEEDS=(
 0

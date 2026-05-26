@@ -110,6 +110,8 @@ class TrainConfig:
     use_koopman: bool = True
     use_asts: bool = True
     koopman_coef: float = 0.01  # Koopman 损失系数
+    koopman_kpe_coef: float = 0.15   # KPE 精度损失系数
+    asts_coef: float = 0.005          # 训练 ASTS 正则系数
 
     asts_lr: float = 0.002  # 信任域微调学习率 (推荐 0.002)
     asts_optim_steps: int = 3  # 梯度微调步数
@@ -235,10 +237,10 @@ class TrainConfig:
             self.warmup_steps = int(0.1 * self.update_steps)
             self.decay_steps = int(0.1 * self.update_steps)
 
-            self.embedding_dropout = 0.0
-            self.loss_fn = "mse"
-            self.wmse_coef = (0.0, 0.0)
-            self.correct_thershold = None
+            # self.embedding_dropout = 0.0
+            # self.loss_fn = "mse"
+            # self.wmse_coef = (0.0, 0.0)
+            # self.correct_thershold = None
         # evaluation
         # if self.eval_only:
         # assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
@@ -344,7 +346,6 @@ def correct_outliers(config, data_info, data_dist, correct=False):  # New
 def compute_loss(config, model, batch):
     log_dict, debug_dict = {}, {}
     states, actions, returns, rewards, time_steps, mask, attack_mask, traj_indexs = [b.to(config.device) for b in batch]
-    # True value indicates that the corresponding key value will be ignored
     padding_mask = ~mask.to(torch.bool)
 
     predicted = model(
@@ -369,33 +370,38 @@ def compute_loss(config, model, batch):
     loss_reward = loss_fn(config, predicted_rewards, rewards, mask, config.wmse_coef[1])
     loss += config.reward_coef * loss_reward
     log_dict.update({"loss_reward": loss_reward.item()})
-    #### new
+
+    #### Koopman 损失（手术2 已整合）
     if model.use_koopman:
         st, st_next = states[:, :-1, :], states[:, 1:, :]
         act_t = actions[:, :-1, :]
 
-        # 1. 仅构造最基本的高斯白噪声负样本 (维持流形的平滑性与线性比例)
+        # 负样本构造
         st_corr = st_next + torch.randn_like(st_next) * 0.1
 
-        # 2. 前向传播获取预测流形和真实流形
+        # 获取预测和真实流形
         g_next_true, g_next_pred, _ = model.koopman(st, act_t, st_next)
 
-        # 3. 计算正样本和单一负样本的余弦相似度
+        # --- 计算 KPE（供后面 ASTS 使用）---
+        kpe_errors = torch.norm(g_next_pred - g_next_true, dim=-1)  # [B, L-1]
+
+        # 原始对比损失
         sim_pos = F.cosine_similarity(g_next_pred, g_next_true, dim=-1)
         sim_neg = F.cosine_similarity(g_next_pred, model.koopman.g(st_corr), dim=-1)
-
-        # 4. 二元 InfoNCE 损失
         logits = torch.stack([sim_pos, sim_neg], dim=-1) / 0.1
         labels = torch.zeros(logits.size(0) * logits.size(1), dtype=torch.long, device=config.device)
-
-        # 🌟 恢复为二分类交叉熵 (只推开高斯噪声，绝不撕裂尺度)
         loss_k = F.cross_entropy(logits.view(-1, 2), labels)
 
-        loss_spectral = torch.norm(model.koopman.K, p=2)
+        # --- 手术2：加入 KPE 精度损失 ---
+        mask_k = mask[:, :-1]
+        kpe_mse = F.mse_loss(g_next_pred, g_next_true, reduction='none').mean(dim=-1)
+        kpe_mse = (kpe_mse * mask_k).sum() / (mask_k.sum() + 1e-6)
+        loss_k = loss_k + config.koopman_kpe_coef * kpe_mse
 
-        # 把谱惩罚加进总 loss，系数给 0.01
-        loss += config.koopman_coef * loss_k + 0.01 * loss_spectral
-        log_dict.update({"loss_koopman": loss_k.item()})
+        loss += config.koopman_coef * loss_k
+        log_dict.update({"loss_koopman": loss_k.item(), "kpe_mse": kpe_mse.item()})
+    else:
+        kpe_errors = None
 
     data_info = None
     if config.correct_thershold is not None:
@@ -404,6 +410,22 @@ def compute_loss(config, model, batch):
             "mask": mask, "attack_mask": attack_mask,
             "traj_indexs": traj_indexs, "time_steps": time_steps,
         }
+
+    # --- 手术3：训练弹性 ASTS 正则 ---
+    if model.use_asts and kpe_errors is not None:
+        act_diff = torch.norm(predicted_actions[:, 1:] - predicted_actions[:, :-1], dim=-1)
+        mask_shift = mask[:, :-1] * mask[:, 1:]
+        avg_kpe = kpe_errors.mean(dim=1, keepdim=True)
+        ratio = kpe_errors / (avg_kpe + 1e-6)
+        penalty_factor = torch.clamp(ratio - 1.0, min=0.0)
+        alpha, beta = 0.4, 1.5
+        dynamic_threshold = alpha * torch.exp(-beta * penalty_factor)
+        dynamic_threshold = torch.clamp(dynamic_threshold, min=0.05)
+        violation = F.relu(act_diff - dynamic_threshold)
+        asts_loss = (violation * mask_shift).sum() / (mask_shift.sum() + 1e-6)
+        loss += config.asts_coef * asts_loss
+        log_dict["loss_asts"] = asts_loss.item()
+
     return loss, log_dict, debug_dict, data_info
 
 
