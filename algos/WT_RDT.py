@@ -111,7 +111,7 @@ class TrainConfig:
     use_asts: bool = True
     koopman_coef: float = 0.01  # Koopman 损失系数
     koopman_kpe_coef: float = 0.15   # KPE 精度损失系数
-    asts_coef: float = 0.005          # 训练 ASTS 正则系数
+    asts_coef: float = 0.003          # 训练 ASTS 正则系数
 
     asts_lr: float = 0.002  # 信任域微调学习率 (推荐 0.002)
     asts_optim_steps: int = 3  # 梯度微调步数
