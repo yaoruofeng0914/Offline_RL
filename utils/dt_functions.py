@@ -575,7 +575,7 @@ class GatedCrossFrequencyInjection(nn.Module):
 
         # KPE 条件映射：接收 [绝对KPE, 对数比值] 两维输入
         self.kpe_condition = nn.Sequential(
-            nn.Linear(3, embed_dim),
+            nn.Linear(2, embed_dim),
             nn.LayerNorm(embed_dim),
             nn.SiLU()
         )
@@ -590,7 +590,7 @@ class GatedCrossFrequencyInjection(nn.Module):
             nn.Sigmoid()
         )
         nn.init.normal_(self.gating_network[-2].weight, mean=0.0, std=0.02)
-        nn.init.constant_(self.gating_network[-2].bias, 2.0)
+        nn.init.constant_(self.gating_network[-2].bias, 1.0)
 
         # FFN 融合后处理
         self.ffn = nn.Sequential(
@@ -815,31 +815,14 @@ class DecisionTransformer(nn.Module):
                 kpe_errors = torch.norm(g_next_pred - g_next_true, dim=-1)
                 kpe_sequence = F.pad(kpe_errors, (1, 0), value=0.0)
 
-                # 窗口大小设为 5，提高统计稳定性
-                window = 5
-
-                # 计算对数比值（保留，作为辅助信号）
+                window = 3
                 kpe_padded = F.pad(kpe_sequence.unsqueeze(1), (window - 1, 0), mode='replicate')
                 smooth_kpe = F.avg_pool1d(kpe_padded, kernel_size=window, stride=1).squeeze(1)
                 smooth_kpe_safe = torch.clamp(smooth_kpe, min=1e-4)
                 log_ratio = torch.log1p(kpe_sequence) - torch.log1p(smooth_kpe_safe)
-                log_ratio = torch.clamp(log_ratio, min=-5.0, max=5.0)
-
-                # 计算滑动窗口均值和标准差用于 z-score
-                kpe_mean = smooth_kpe  # 复用平滑结果
-                # 滑动方差：E[X^2] - E[X]^2
-                kpe_sq_padded = F.pad((kpe_sequence ** 2).unsqueeze(1), (window - 1, 0), mode='replicate')
-                kpe_sq_mean = F.avg_pool1d(kpe_sq_padded, kernel_size=window, stride=1).squeeze(1)
-                kpe_var = torch.clamp(kpe_sq_mean - kpe_mean ** 2, min=1e-6)
-                kpe_std = torch.sqrt(kpe_var)
-                kpe_zscore = (kpe_sequence - kpe_mean) / (kpe_std + 1e-6)
-                kpe_zscore = torch.clamp(kpe_zscore, min=-4.0, max=4.0)
-
-                # 钳制绝对 KPE 防止爆炸
                 kpe_sequence = torch.clamp(kpe_sequence, max=100.0)
-
-                # 组装三维特征 [B, L, 3]
-                kpe_sequence = torch.stack([kpe_sequence, log_ratio, kpe_zscore], dim=-1)
+                log_ratio = torch.clamp(log_ratio, min=-5.0, max=5.0)
+                kpe_sequence = torch.stack([kpe_sequence, log_ratio], dim=-1)
 
         if self.use_koopman:
             state_emb = self.koopman.g(states)
@@ -849,9 +832,9 @@ class DecisionTransformer(nn.Module):
         returns_emb = self.return_emb(returns_to_go)
         if self.use_mwpa:
             state_emb = self.freq_fusion_S(state_emb, kpe=kpe_sequence)
-            act_emb = self.freq_fusion_A(act_emb, kpe=kpe_sequence)
-            returns_emb = self.freq_fusion_R(returns_emb, kpe=kpe_sequence)
-        # [batch_size, seq_len * 3, emb_dim], (r_0, s_0, a_0, r_1, s_1, a_1, ...)
+            act_emb = self.freq_fusion_A(act_emb, kpe=None)  # 去掉 KPE
+            returns_emb = self.freq_fusion_R(returns_emb, kpe=None)
+            # [batch_size, seq_len * 3, emb_dim], (r_0, s_0, a_0, r_1, s_1, a_1, ...)
         if self.embed_order == "rsa":
             sequence = torch.stack([returns_emb, state_emb, act_emb], dim=1)
         elif self.embed_order == "sar":
