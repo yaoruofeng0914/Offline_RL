@@ -99,6 +99,14 @@ class SequenceDataset:
         self.sample_prob = info["traj_lens"] / info["traj_lens"].sum()
         self.float_dtype = np.float32
 
+        self.use_minimax_return = getattr(config, 'use_minimax_return', False)
+        if self.use_minimax_return:
+            self.minimax_returns = relabel_minimax_returns(
+                self.dataset, config.state_dim, config.action_dim, config, logger, config.device
+            )
+        else:
+            self.minimax_returns = None
+
     def correct(self, traj_indexs, time_steps, correct_data, correct_type):
         for i, (tarj_i, step_j) in enumerate(zip(traj_indexs, time_steps)):
             if step_j < self.dataset[tarj_i][correct_type].shape[0]:
@@ -131,33 +139,47 @@ class SequenceDataset:
             rewards = pad_along_axis(rewards, pad_to=self.seq_len)
             attack_mask = pad_along_axis(attack_mask, pad_to=self.seq_len)
 
+        if self.use_minimax_return and self.minimax_returns is not None:
+            minimax_rtg = self.minimax_returns[traj_idx][start_idx: start_idx + self.seq_len]
+            if minimax_rtg.shape[0] < self.seq_len:
+                minimax_rtg = pad_along_axis(minimax_rtg.reshape(-1, 1), pad_to=self.seq_len)
+            else:
+                minimax_rtg = minimax_rtg.reshape(-1, 1)
+        else:
+            minimax_rtg = returns.copy()
+
         return states.astype(self.float_dtype), actions.astype(self.float_dtype), returns.astype(self.float_dtype), \
-            rewards.astype(self.float_dtype), time_steps, mask, attack_mask, traj_idx
+            minimax_rtg.astype(self.float_dtype), rewards.astype(
+            self.float_dtype), time_steps, mask, attack_mask, traj_idx
 
     def get_batch(self, batch_size: int, recalculate_return: bool = False) -> Tuple[torch.Tensor, ...]:
         traj_ids = np.random.choice(np.arange(len(self.dataset)), size=batch_size, p=self.sample_prob, replace=True)
 
-        states, actions, returns, rewards, time_steps, masks, attack_mask, traj_index = [], [], [], [], [], [], [], []
+        states, actions, returns, minimax_returns_list, rewards, time_steps, masks, attack_mask, traj_index = \
+            [], [], [], [], [], [], [], [], []
         for traj_id in traj_ids:
             start_idx = np.random.randint(0, self.dataset[traj_id]["rewards"].shape[0])
-            state, action, ret, reward, time_step, mask, att_mask, traj_i = self.__prepare_sample(traj_id, start_idx,
-                                                                                                  recalculate_return)
+            state, action, ret, minimax_ret, reward, time_step, mask, att_mask, traj_i = self.__prepare_sample(
+                traj_id, start_idx, recalculate_return
+            )
             states.append(state)
             actions.append(action)
             returns.append(ret)
+            minimax_returns_list.append(minimax_ret)  # 新增
             rewards.append(reward)
             time_steps.append(time_step)
             masks.append(mask)
-            attack_mask.append(att_mask)
+            attack_mask.append(att_mask)  # 保持原样
             traj_index.append(traj_i)
         return [
             torch.tensor(np.array(states)),
             torch.tensor(np.array(actions)),
             torch.tensor(np.array(returns)),
+            torch.tensor(np.array(minimax_returns_list)),  # 新增
             torch.tensor(np.array(rewards)),
             torch.tensor(np.array(time_steps)),
             torch.tensor(np.array(masks)),
-            torch.tensor(np.array(attack_mask)),
+            torch.tensor(np.array(attack_mask)),  # 保持原样
             torch.tensor(np.array(traj_index))
         ]
 
@@ -590,7 +612,7 @@ class GatedCrossFrequencyInjection(nn.Module):
             nn.Sigmoid()
         )
         nn.init.normal_(self.gating_network[-2].weight, mean=0.0, std=0.02)
-        nn.init.constant_(self.gating_network[-2].bias, 1.0)
+        nn.init.constant_(self.gating_network[-2].bias, 2.0)
 
         # FFN 融合后处理
         self.ffn = nn.Sequential(
@@ -832,9 +854,9 @@ class DecisionTransformer(nn.Module):
         returns_emb = self.return_emb(returns_to_go)
         if self.use_mwpa:
             state_emb = self.freq_fusion_S(state_emb, kpe=kpe_sequence)
-            act_emb = self.freq_fusion_A(act_emb, kpe=None)  # 去掉 KPE
-            returns_emb = self.freq_fusion_R(returns_emb, kpe=None)
-            # [batch_size, seq_len * 3, emb_dim], (r_0, s_0, a_0, r_1, s_1, a_1, ...)
+            act_emb = self.freq_fusion_A(act_emb, kpe=kpe_sequence)
+            returns_emb = self.freq_fusion_R(returns_emb, kpe=kpe_sequence)
+        # [batch_size, seq_len * 3, emb_dim], (r_0, s_0, a_0, r_1, s_1, a_1, ...)
         if self.embed_order == "rsa":
             sequence = torch.stack([returns_emb, state_emb, act_emb], dim=1)
         elif self.embed_order == "sar":
@@ -879,3 +901,85 @@ class DecisionTransformer(nn.Module):
         else:
             reward_out = None
         return action_out, reward_out
+# ==========================================
+# 🌟 Minimax 回报重标定模块
+# ==========================================
+class ExpectileQNetwork(nn.Module):
+    """用于估计极小极大回报的 Q 网络"""
+    def __init__(self, state_dim, action_dim, hidden_dim=256):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(state_dim + action_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+
+    def forward(self, state, action):
+        return self.net(torch.cat([state, action], dim=-1))
+
+
+def expectile_loss(pred, target, expectile):
+    """计算期望分位数损失"""
+    diff = target - pred
+    weight = torch.where(diff > 0, expectile, 1 - expectile)
+    return (weight * (diff ** 2)).mean()
+
+
+def relabel_minimax_returns(dataset, state_dim, action_dim, config, logger, device="cpu"):
+    """为数据集中的每条轨迹重新计算 Minimax 回报"""
+    logger.info("开始 Minimax 回报重标定...")
+
+    all_states = []
+    all_actions = []
+    all_rewards = []
+    all_dones = []
+
+    for traj in dataset:
+        all_states.append(torch.tensor(traj["observations"], dtype=torch.float32))
+        all_actions.append(torch.tensor(traj["actions"], dtype=torch.float32))
+        all_rewards.append(torch.tensor(traj["rewards"], dtype=torch.float32))
+        all_dones.append(torch.tensor(
+            [0] * (len(traj["rewards"]) - 1) + [1], dtype=torch.float32
+        ))
+
+    q_network = ExpectileQNetwork(state_dim, action_dim, config.minimax_q_hidden).to(device)
+    optimizer = torch.optim.Adam(q_network.parameters(), lr=config.minimax_q_lr)
+
+    states = torch.cat(all_states, dim=0).to(device)
+    actions = torch.cat(all_actions, dim=0).to(device)
+    rewards = torch.cat(all_rewards, dim=0).to(device)
+    dones = torch.cat(all_dones, dim=0).to(device)
+
+    # 计算 Monte Carlo 回报作为 target
+    returns = torch.zeros_like(rewards)
+    running_return = 0
+    for t in reversed(range(len(rewards))):
+        running_return = rewards[t] + (1 - dones[t]) * running_return
+        returns[t] = running_return
+
+    for epoch in range(config.minimax_q_epochs):
+        q_values = q_network(states, actions).squeeze()
+        loss = expectile_loss(q_values, returns, config.minimax_expectile)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    logger.info(f"Q 网络训练完成，最终 expectile loss: {loss.item():.4f}")
+
+    minimax_rtgs = {}
+    q_network.eval()
+    with torch.no_grad():
+        for traj_idx, traj in enumerate(dataset):
+            traj_states = torch.tensor(traj["observations"], dtype=torch.float32).to(device)
+            traj_actions = torch.tensor(traj["actions"], dtype=torch.float32).to(device)
+            q_values = q_network(traj_states, traj_actions).squeeze().cpu().numpy()
+
+            rtg = np.zeros_like(traj["rewards"])
+            for t in range(len(traj["rewards"])):
+                rtg[t] = q_values[t]
+            minimax_rtgs[traj_idx] = rtg
+
+    logger.info("Minimax 回报重标定完成")
+    return minimax_rtgs
