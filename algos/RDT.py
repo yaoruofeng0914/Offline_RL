@@ -100,6 +100,8 @@ class TrainConfig:
     use_original: int = 0  # 0 or 1
     same_index: int = 0
     froce_attack: int = 0
+    # NSAOP 测试模式
+    test_attack_mode: str = ""  # 留空表示跟随 corruption_mode，设为 "nsaop" 启用新基准
 
     def __post_init__(self):
         # train
@@ -229,7 +231,11 @@ class TrainConfig:
             #             pass
             #         self.__dict__[key] = value
             #         # print(f"Set {key} to {value}")
-        self.eval_attack_mode = self.corruption_mode # random, adversarial
+        # 如果指定了 test_attack_mode，则使用指定的模式；否则跟随训练模式
+        if self.test_attack_mode:
+            self.eval_attack_mode = self.test_attack_mode
+        else:
+            self.eval_attack_mode = self.corruption_mode
         self.eval_attack_eps = 1
         self.eval_corruption_rate = 0.3
         if self.eval_attack_mode == "random" and self.corruption_tag == "rew":
@@ -403,13 +409,18 @@ def train(config: TrainConfig, logger: Logger):
             data_dist.append(RunningMeanStd(thershold=thershold) if thershold > 0.0 else None)
 
     if config.eval_attack:
-        state_std, act_std, rew_std, rew_min = func.get_state_std(config)
-        eval_attacker = Evaluation_Attacker(
-            config, config.env, config.corruption_agent, config.eval_attack_eps,
-            config.state_dim, config.action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
-            MODEL_PATH[config.corruption_agent],
-        )
-        print("eval_attack: True")
+        # NSAOP 模式下不使用原有攻击器，避免报错
+        if config.eval_attack_mode == "nsaop":
+            config.eval_attack_mode = ""
+            eval_attacker = None
+        else:
+            state_std, act_std, rew_std, rew_min = func.get_state_std(config)
+            eval_attacker = Evaluation_Attacker(
+                config, config.env, config.corruption_agent, config.eval_attack_eps,
+                config.state_dim, config.action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
+                MODEL_PATH[config.corruption_agent],
+            )
+            print("eval_attack: True")
     else:
         eval_attacker = None
         print("eval_attack: False")
@@ -509,16 +520,6 @@ def train(config: TrainConfig, logger: Logger):
                         torch.save(
                             model.state_dict(),
                             os.path.join(logger.get_dir(), f"best_policy_50.pth"),
-                        )
-            if epoch > config.num_epochs - 50:
-                if now_score > best_score_50:
-                    best_score_50 = now_score
-                    with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
-                            f.write(f"{best_score_50:.4f}_{epoch}")
-                    if config.save_model:
-                        torch.save(
-                            model.state_dict(),
-                            os.path.join(logger.get_dir(), f"best_policy_50.pth"),
                         )        
             if epoch == config.num_epochs:
                 with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
@@ -554,15 +555,20 @@ def test(config: TrainConfig, logger: Logger):
         reward_scale=config.reward_scale,
     )
     env.seed(config.seed)
-    
+
     if config.eval_attack:
-        state_std, act_std, rew_std, rew_min = func.get_state_std(config)
-        eval_attacker = Evaluation_Attacker(
-            config, config.env, config.corruption_agent, config.eval_attack_eps,
-            config.state_dim, config.action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
-            MODEL_PATH[config.corruption_agent],
-        )
-        print("eval_attack: True")
+        # NSAOP 模式下不使用原有攻击器，避免报错
+        if config.eval_attack_mode == "nsaop":
+            eval_attacker = None
+            print("eval_attack: NSAOP (原有攻击器已禁用)")
+        else:
+            state_std, act_std, rew_std, rew_min = func.get_state_std(config)
+            eval_attacker = Evaluation_Attacker(
+                config, config.env, config.corruption_agent, config.eval_attack_eps,
+                config.state_dim, config.action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
+                MODEL_PATH[config.corruption_agent],
+            )
+            print("eval_attack: True")
     else:
         eval_attacker = None
         print("eval_attack: False")

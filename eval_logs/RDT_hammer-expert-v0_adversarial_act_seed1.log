@@ -1,0 +1,139 @@
+pybullet build time: May 20 2022 19:44:17
+Logging to /home/user/Offline_RL/checkpoint4baseline/RDT/hammer-expert-v0/RDT_hammer-expert-v0_adv_act_2026_20260213215124_57402a46-3ef9-4f02-83d6-b55238fd4bf5/eval_attack
+Load new dataset from /home/user/Offline_RL/log_attack_data/hammer-expert-v0/IQL_adversarial_ratio_0.01_act_1.0_0.3.pth
+adversarial actions
+Attack name: _ratio_0.01_act_1.0_0.3
+/home/user/Offline_RL/src/d4rl/d4rl/hand_manipulation_suite/hammer_v0.py:14: UserWarning: [33mThis environment is deprecated. Please use the most recent version of this environment.[0m
+  offline_env.OfflineEnv.__init__(self, **kwargs)
+/home/user/Offline_RL/gym-0.19.0/gym/logger.py:34: UserWarning: [33mWARN: Box bound precision lowered by casting to float32[0m
+  warnings.warn(colorize("%s: %s" % ("WARN", msg % args), "yellow"))
+/home/user/Offline_RL/utils/dt_functions.py:45: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  dataset = torch.load(dataset_path)
+/home/user/Offline_RL/utils/attack.py:449: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  new_dataset = torch.load(dataset_path)
+Processing trajectories:   0%|          | 0/10000 [00:00<?, ?it/s]Processing trajectories: 100%|██████████| 10000/10000 [00:00<00:00, 499797.90it/s]Dataset: 50 trajectories
+
+/home/user/Offline_RL/algos/RDT.py:591: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  model.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch)), strict=False)
+eval_attack: NSAOP (原有攻击器已禁用)
+eval epoch: 10
+Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:03,  2.30it/s]Evaluation:  20%|██        | 2/10 [00:00<00:02,  3.20it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  3.64it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.88it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  4.04it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:00,  4.16it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  4.21it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  4.23it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  4.24it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  4.25it/s]                                                           Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:03,  2.33it/s]Evaluation:  20%|██        | 2/10 [00:00<00:02,  2.98it/s]Evaluation:  30%|███       | 3/10 [00:00<00:02,  3.40it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.68it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.88it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:00,  4.02it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  4.10it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  4.16it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  4.20it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  4.25it/s]                                                           ----------------------------------------------
+| eval/                          |           |
+|    12800_normalized_score_mean | 0.141538  |
+|    12800_normalized_score_std  | 0.0423337 |
+|    12800_reward_mean           | -256.359  |
+|    12800_reward_std            | 5.53259   |
+|    6400_normalized_score_mean  | 0.126559  |
+|    6400_normalized_score_std   | 0.0459164 |
+|    6400_reward_mean            | -258.317  |
+|    6400_reward_std             | 6.00081   |
+----------------------------------------------
+eval epoch: 20
+Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  4.14it/s]Evaluation:  20%|██        | 2/10 [00:00<00:01,  4.27it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  4.32it/s]Evaluation:  40%|████      | 4/10 [00:00<00:01,  4.32it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  4.34it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:00,  4.36it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  4.35it/s]Evaluation:  80%|████████  | 8/10 [00:01<00:00,  4.35it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  4.36it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  4.34it/s]                                                           Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  4.30it/s]Evaluation:  20%|██        | 2/10 [00:00<00:01,  4.33it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  4.36it/s]Evaluation:  40%|████      | 4/10 [00:00<00:01,  4.37it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  4.38it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:00,  4.39it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  4.38it/s]Evaluation:  80%|████████  | 8/10 [00:01<00:00,  4.37it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  4.35it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  4.35it/s]                                                           ----------------------------------------------
+| eval/                          |           |
+|    12800_normalized_score_mean | 0.134811  |
+|    12800_normalized_score_std  | 0.0334705 |
+|    12800_reward_mean           | -257.238  |
+|    12800_reward_std            | 4.37425   |
+|    6400_normalized_score_mean  | 0.117331  |
+|    6400_normalized_score_std   | 0.0389989 |
+|    6400_reward_mean            | -259.523  |
+|    6400_reward_std             | 5.09676   |
+----------------------------------------------
+eval epoch: 30
+Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  4.36it/s]Evaluation:  20%|██        | 2/10 [00:00<00:01,  4.36it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  4.38it/s]Evaluation:  40%|████      | 4/10 [00:00<00:01,  4.40it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  4.41it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:00,  4.40it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  4.40it/s]Evaluation:  80%|████████  | 8/10 [00:01<00:00,  4.40it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  4.40it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  4.40it/s]                                                           Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  4.25it/s]Evaluation:  20%|██        | 2/10 [00:00<00:01,  4.31it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  4.36it/s]Evaluation:  40%|████      | 4/10 [00:00<00:01,  4.38it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  4.37it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:00,  4.37it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  4.38it/s]Evaluation:  80%|████████  | 8/10 [00:01<00:00,  4.38it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  4.37it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  4.38it/s]                                                           ---------------------------------------------
+| eval/                          |          |
+|    12800_normalized_score_mean | 0.184293 |
+|    12800_normalized_score_std  | 0.051258 |
+|    12800_reward_mean           | -250.771 |
+|    12800_reward_std            | 6.69891  |
+|    6400_normalized_score_mean  | 0.168872 |
+|    6400_normalized_score_std   | 0.103736 |
+|    6400_reward_mean            | -252.787 |
+|    6400_reward_std             | 13.5573  |
+---------------------------------------------
+eval epoch: 40
+Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  4.26it/s]Evaluation:  20%|██        | 2/10 [00:00<00:01,  4.29it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  4.30it/s]Evaluation:  40%|████      | 4/10 [00:00<00:01,  4.31it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  4.30it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:00,  4.31it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  4.30it/s]Evaluation:  80%|████████  | 8/10 [00:01<00:00,  4.33it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  4.32it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  4.34it/s]                                                           Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  4.30it/s]Evaluation:  20%|██        | 2/10 [00:00<00:01,  4.26it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  4.23it/s]Evaluation:  40%|████      | 4/10 [00:00<00:01,  4.27it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.00it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.29it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.49it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.69it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.88it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  3.99it/s]                                                           ----------------------------------------------
+| eval/                          |           |
+|    12800_normalized_score_mean | 0.104182  |
+|    12800_normalized_score_std  | 0.114439  |
+|    12800_reward_mean           | -261.241  |
+|    12800_reward_std            | 14.956    |
+|    6400_normalized_score_mean  | 0.150518  |
+|    6400_normalized_score_std   | 0.0912225 |
+|    6400_reward_mean            | -255.185  |
+|    6400_reward_std             | 11.9219   |
+----------------------------------------------
+eval epoch: 50
+Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  3.73it/s]Evaluation:  20%|██        | 2/10 [00:00<00:02,  3.90it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  3.79it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.82it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.87it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.92it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.81it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.85it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.83it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  3.75it/s]                                                           Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  3.98it/s]Evaluation:  20%|██        | 2/10 [00:00<00:02,  3.80it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  3.73it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.70it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.59it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.56it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.54it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.61it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.75it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  3.66it/s]                                                           ---------------------------------------------
+| eval/                          |          |
+|    12800_normalized_score_mean | 1.93687  |
+|    12800_normalized_score_std  | 0.987425 |
+|    12800_reward_mean           | -21.7277 |
+|    12800_reward_std            | 129.047  |
+|    6400_normalized_score_mean  | 13.5855  |
+|    6400_normalized_score_std   | 34.1931  |
+|    6400_reward_mean            | 1500.63  |
+|    6400_reward_std             | 4468.69  |
+---------------------------------------------
+eval epoch: 60
+Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  3.52it/s]Evaluation:  20%|██        | 2/10 [00:00<00:02,  3.53it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  3.58it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.65it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.61it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.66it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.73it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.73it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.66it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  3.61it/s]                                                           Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  3.59it/s]Evaluation:  20%|██        | 2/10 [00:00<00:02,  3.60it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  3.55it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.58it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.55it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.53it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.57it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.55it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.57it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  3.53it/s]                                                           ---------------------------------------------
+| eval/                          |          |
+|    12800_normalized_score_mean | 21.2136  |
+|    12800_normalized_score_std  | 36.3961  |
+|    12800_reward_mean           | 2497.55  |
+|    12800_reward_std            | 4756.6   |
+|    6400_normalized_score_mean  | 3.03166  |
+|    6400_normalized_score_std   | 0.384166 |
+|    6400_reward_mean            | 121.351  |
+|    6400_reward_std             | 50.2066  |
+---------------------------------------------
+eval epoch: 70
+Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  3.44it/s]Evaluation:  20%|██        | 2/10 [00:00<00:02,  3.36it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  3.57it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.55it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.65it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.65it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.68it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.58it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  2.91it/s]Evaluation: 100%|██████████| 10/10 [00:03<00:00,  2.99it/s]                                                           Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  3.22it/s]Evaluation:  20%|██        | 2/10 [00:00<00:02,  3.63it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  3.67it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.72it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.62it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.59it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.54it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.53it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.52it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  3.46it/s]                                                           ---------------------------------------------
+| eval/                          |          |
+|    12800_normalized_score_mean | 15.4082  |
+|    12800_normalized_score_std  | 31.8681  |
+|    12800_reward_mean           | 1738.84  |
+|    12800_reward_std            | 4164.83  |
+|    6400_normalized_score_mean  | 17.0934  |
+|    6400_normalized_score_std   | 34.5773  |
+|    6400_reward_mean            | 1959.08  |
+|    6400_reward_std             | 4518.91  |
+---------------------------------------------
+eval epoch: 80
+Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  3.45it/s]Evaluation:  20%|██        | 2/10 [00:00<00:02,  3.79it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  4.00it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  4.10it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.87it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.72it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.81it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.80it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.70it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  3.65it/s]                                                           Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  4.24it/s]Evaluation:  20%|██        | 2/10 [00:00<00:02,  3.92it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  4.03it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.79it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.86it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.97it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.82it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.73it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.81it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  3.71it/s]                                                           ---------------------------------------------
+| eval/                          |          |
+|    12800_normalized_score_mean | 1.9128   |
+|    12800_normalized_score_std  | 1.08368  |
+|    12800_reward_mean           | -24.873  |
+|    12800_reward_std            | 141.626  |
+|    6400_normalized_score_mean  | 6.8558   |
+|    6400_normalized_score_std   | 11.5727  |
+|    6400_reward_mean            | 621.127  |
+|    6400_reward_std             | 1512.44  |
+---------------------------------------------
+eval epoch: 90
+Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  3.56it/s]Evaluation:  20%|██        | 2/10 [00:00<00:02,  3.57it/s]Evaluation:  30%|███       | 3/10 [00:00<00:02,  3.46it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.55it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.70it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.61it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.71it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.88it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.89it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  3.91it/s]                                                           Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  4.05it/s]Evaluation:  20%|██        | 2/10 [00:00<00:01,  4.08it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  4.00it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.82it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.95it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.87it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.59it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.60it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.61it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  3.64it/s]                                                           ---------------------------------------------
+| eval/                          |          |
+|    12800_normalized_score_mean | 15.5224  |
+|    12800_normalized_score_std  | 27.5664  |
+|    12800_reward_mean           | 1753.76  |
+|    12800_reward_std            | 3602.65  |
+|    6400_normalized_score_mean  | 13.6014  |
+|    6400_normalized_score_std   | 34.2899  |
+|    6400_reward_mean            | 1502.7   |
+|    6400_reward_std             | 4481.34  |
+---------------------------------------------
+eval epoch: 100
+Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  3.42it/s]Evaluation:  20%|██        | 2/10 [00:00<00:02,  3.53it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  3.84it/s]Evaluation:  40%|████      | 4/10 [00:01<00:02,  2.65it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  2.89it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.09it/s]Evaluation:  70%|███████   | 7/10 [00:02<00:00,  3.24it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.32it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.46it/s]Evaluation: 100%|██████████| 10/10 [00:03<00:00,  3.59it/s]                                                           Evaluation:   0%|          | 0/10 [00:00<?, ?it/s]Evaluation:  10%|█         | 1/10 [00:00<00:02,  3.75it/s]Evaluation:  20%|██        | 2/10 [00:00<00:01,  4.05it/s]Evaluation:  30%|███       | 3/10 [00:00<00:01,  3.80it/s]Evaluation:  40%|████      | 4/10 [00:01<00:01,  3.84it/s]Evaluation:  50%|█████     | 5/10 [00:01<00:01,  3.74it/s]Evaluation:  60%|██████    | 6/10 [00:01<00:01,  3.83it/s]Evaluation:  70%|███████   | 7/10 [00:01<00:00,  3.86it/s]Evaluation:  80%|████████  | 8/10 [00:02<00:00,  3.84it/s]Evaluation:  90%|█████████ | 9/10 [00:02<00:00,  3.83it/s]Evaluation: 100%|██████████| 10/10 [00:02<00:00,  3.84it/s]                                                           ---------------------------------------------
+| eval/                          |          |
+|    12800_normalized_score_mean | 20.1756  |
+|    12800_normalized_score_std  | 35.3357  |
+|    12800_reward_mean           | 2361.89  |
+|    12800_reward_std            | 4618.02  |
+|    6400_normalized_score_mean  | 36.8565  |
+|    6400_normalized_score_std   | 53.1739  |
+|    6400_reward_mean            | 4541.91  |
+|    6400_reward_std             | 6949.29  |
+---------------------------------------------
+

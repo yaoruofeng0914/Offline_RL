@@ -15,7 +15,7 @@ import pyrallis
 import torch
 import wandb
 import utils.functions as func
-import utils.dt_functions as dt_func
+import utils.dt_functions_1 as dt_func
 
 from tqdm.auto import trange  # noqa
 from torch.nn import functional as F
@@ -111,14 +111,7 @@ class TrainConfig:
     use_asts: bool = True
     koopman_coef: float = 0.01  # Koopman 损失系数
     koopman_kpe_coef: float = 0.15   # KPE 精度损失系数
-    asts_coef: float = 0.005          # 训练 ASTS 正则系数
-
-    # Minimax 配置
-    use_minimax_return: bool = True
-    minimax_expectile: float = 0.1
-    minimax_q_hidden: int = 256
-    minimax_q_epochs: int = 50
-    minimax_q_lr: float = 1e-3
+    asts_coef: float = 0.003          # 训练 ASTS 正则系数
 
     asts_lr: float = 0.002  # 信任域微调学习率 (推荐 0.002)
     asts_optim_steps: int = 3  # 梯度微调步数
@@ -351,22 +344,16 @@ def correct_outliers(config, data_info, data_dist, correct=False):  # New
 
 
 def compute_loss(config, model, batch):
-    # 修改解包顺序（增加 minimax_returns）
-    states, actions, returns, minimax_returns, rewards, time_steps, mask, attack_mask, traj_indexs = \
-        [b.to(config.device) for b in batch]
-
-    # 使用 Minimax 回报作为 RTG 条件
-    if config.use_minimax_return:
-        rtg = minimax_returns
-    else:
-        rtg = returns
+    log_dict, debug_dict = {}, {}
+    states, actions, returns, rewards, time_steps, mask, attack_mask, traj_indexs = [b.to(config.device) for b in batch]
+    padding_mask = ~mask.to(torch.bool)
 
     predicted = model(
         states=states,
         actions=actions,
-        returns_to_go=rtg,  # 使用 Minimax RTG
+        returns_to_go=returns,
         time_steps=time_steps,
-        padding_mask=~mask.to(torch.bool),
+        padding_mask=padding_mask,
     )
     predicted_actions = predicted[0]
     predicted_rewards = predicted[1]
@@ -473,6 +460,9 @@ def train(config: TrainConfig, logger: Logger):
 
     # model
     model = set_model(config)
+    if hasattr(dataset, 'domain_energy'):
+        model.domain_energy = dataset.domain_energy
+        model.behavior_energy = dataset.behavior_energy
     # logger.info(f"Network: \n{str(model)}")
     logger.info(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
 
@@ -561,10 +551,10 @@ def train(config: TrainConfig, logger: Logger):
                     torch.nn.utils.clip_grad_norm_(head_params, config.clip_grad)
                 optim_sam.first_step(zero_grad=True)
 
-                # 第 2 次前向传播：...
-                states, actions, returns, minimax_returns, rewards, time_steps, mask, attack_mask, traj_indexs = [
-                    b.to(config.device) for
-                    b in batch]
+                # 第 2 次前向传播：为了防止主干网络二次求导报错，我们手动剥离它
+                # 我们只关心 action_head 上的 SAM 优化，所以先固定主干特征
+                states, actions, returns, rewards, time_steps, mask, attack_mask, traj_indexs = [b.to(config.device) for
+                                                                                                 b in batch]
                 padding_mask = ~mask.to(torch.bool)
 
                 # 让主干网络不产生梯度
