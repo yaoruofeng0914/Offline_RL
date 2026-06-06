@@ -499,8 +499,8 @@ class NSAOPObsAttacker:
     def __init__(
             self,
             state_dim: int,
-            burst_prob: float = 0.25,      # 更高故障突发概率
-            recover_prob: float = 0.03,     # 更难恢复，故障持续时间更长
+            burst_prob: float = 0.3,      # 更高故障突发概率
+            recover_prob: float = 0.1,     # 更难恢复，故障持续时间更长
             momentum: float = 0.98,         # 极强惯性，漂移几乎不衰减
             eps: float = 5.0,               # 大幅扰动强度
             device: str = "cpu"
@@ -640,10 +640,10 @@ class NSAOPRewAttacker:
     """
     def __init__(
         self,
-        burst_prob: float = 0.25,          # 突发概率
-        recover_prob: float = 0.05,        # 恢复概率 (更低 = 故障持续更久)
+        burst_prob: float = 0.3,          # 突发概率
+        recover_prob: float = 0.1,        # 恢复概率 (更低 = 故障持续更久)
         attack_mode: str = "fake_high",    # "fake_high": 注入虚假高奖励
-        fake_reward_value: float = 10.0,   # 虚假奖励的具体数值
+        fake_reward_value: float = 1.0,   # 虚假奖励的具体数值
         device: str = "cpu"
     ):
         self.burst_prob = burst_prob
