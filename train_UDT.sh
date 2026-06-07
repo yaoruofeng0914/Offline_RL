@@ -1,9 +1,9 @@
 #!/bin/bash
 ENVS=(
-#"door-expert-v0"
+"door-expert-v0"
 #"halfcheetah-medium-replay-v2"
 #"hammer-expert-v0"
-"hopper-medium-replay-v2"
+#"hopper-medium-replay-v2"
 #"kitchen-complete-v0"
 #"kitchen-mixed-v0"
 #"kitchen-partial-v0"
@@ -16,8 +16,8 @@ MODES=(
 )
 
 TAGS=(
-"obs"
-#"act"
+#"obs"
+"act"
 #"rew"
 )
 
@@ -26,7 +26,7 @@ SEEDS=(
 #1
 )
 
-LOG_DIR="full_logs_erdt"
+LOG_DIR="full_logs_udt"          # 改为 UDT 日志目录
 mkdir -p "$LOG_DIR"
 
 MAX_PARALLEL=3
@@ -39,13 +39,11 @@ echo "日志目录: $LOG_DIR"
 echo "计划运行总任务数: $total_jobs"
 echo ""
 
-# 🛡️ 兜底保护
 if [ "$total_jobs" -eq 0 ]; then
     echo "没有需要运行的任务，请检查数组配置。"
     exit 0
 fi
 
-# 进度条渲染函数
 draw_progress_bar() {
     local _progress=$1
     local _total=$2
@@ -66,13 +64,15 @@ for ENV in "${ENVS[@]}"; do
 
                 LOG_FILE="${LOG_DIR}/${ENV}_${MODE}_${TAG}_${SEED}.txt"
 
-                python algos/ERDT.py \
+                # 关键：添加 --test_attack_mode nsaop，启用训练时 NSAOP 评估
+                python algos/UDT.py \
                     --env "$ENV" \
                     --seed "$SEED" \
                     --corruption_mode "$MODE" \
                     --corruption_tag "$TAG" \
                     --corruption_rate 0.3 \
                     --eval_attack True \
+                    --test_attack_mode "nsaop" \
                     --use_wandb 0 \
                     --save_model True \
                     > "$LOG_FILE" 2>&1 &
@@ -92,7 +92,6 @@ for ENV in "${ENVS[@]}"; do
     done
 done
 
-# 等待最后一批任务结束
 if [ "$current_batch" -gt 0 ]; then
     wait
     completed_jobs=$((completed_jobs + current_batch))
@@ -101,14 +100,11 @@ fi
 
 echo -e "\n\n$total_jobs 项训练任务已全部执行完毕！"
 
-# ==============================================================
-# 🌟 自动化后处理：收集最高分并格式化为对齐附件的 CSV
-# ==============================================================
 echo "正在自动提取各 Case 的最高分..."
-SUMMARY_FILE="ERDT_Summary_Scores.csv"
+SUMMARY_FILE="UDT_Summary_Scores.csv"   # 改为 UDT 汇总文件
 
-# 写入 CSV 表头，与附件文件的前 4 个复合主键列名严格对齐
-echo "Environment,Seed,Noise_Type,Attack_Type,ERDT" > $SUMMARY_FILE
+# 表头列名改为 UDT
+echo "Environment,Seed,Noise_Type,Attack_Type,UDT" > $SUMMARY_FILE
 
 for ENV in "${ENVS[@]}"; do
     for MODE in "${MODES[@]}"; do
@@ -118,16 +114,12 @@ for ENV in "${ENVS[@]}"; do
 
                 if [ -f "$LOG_FILE" ]; then
                     RUN_DIR=$(grep "Logging to" "$LOG_FILE" | awk '{print $3}')
-
                     BEST_SCORE="NaN"
-
                     if [ -n "$RUN_DIR" ] && [ -f "${RUN_DIR}/best_score.txt" ]; then
                         SCORE_RAW=$(cat "${RUN_DIR}/best_score.txt")
                         BEST_SCORE=$(echo "$SCORE_RAW" | cut -d'_' -f1)
                     fi
-
                     CAP_MODE="$(tr '[:lower:]' '[:upper:]' <<< ${MODE:0:1})${MODE:1}"
-
                     echo "$ENV,$SEED,$CAP_MODE,$TAG,$BEST_SCORE" >> $SUMMARY_FILE
                 fi
             done

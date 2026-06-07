@@ -72,7 +72,7 @@ for env_dir in "$BASE_DIR"/*; do
             --eval_attack True \
             --corruption_mode "$ATTACK_MODE" \
             --corruption_tag "$location" \
-            --test_attack_mode nsaop \
+            --test_attack_mode "nsaop" \
             --seed "$SEED" \
             --checkpoint_dir "$condition_dir" > "$LOG_FILE" 2>&1
     done

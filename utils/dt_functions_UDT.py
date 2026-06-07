@@ -230,7 +230,6 @@ def eval_rollout(
 
     # cannot step higher than model episode len, as timestep embeddings will crash
     episode_return, episode_len = 0.0, 0.0
-    smoothed_action = None
     for step in range(model.episode_len):
         # first select history up to step, then select last seq_len states,
         # step + 1 as : operator is not inclusive, last action is dummy with zeros
@@ -253,12 +252,6 @@ def eval_rollout(
             attack_flag = np.random.rand()
             if attack_flag < eval_corruption_rate:
                 predicted_action = eval_attacker.attack_act(predicted_action)
-        if smoothed_action is None:
-            smoothed_action = predicted_action.copy()
-        else:
-            alpha = 0.5
-            smoothed_action = alpha * smoothed_action + (1 - alpha) * predicted_action
-        predicted_action = smoothed_action
         predicted_action = np.clip(predicted_action, *action_range)
         next_state, reward, done, info = env.step(predicted_action)
         episode_return += reward
@@ -341,36 +334,44 @@ class DecisionTransformer(nn.Module):
             use_stochastic: bool = False,
             init_temperature: float = 0.1,
             corruption_tag: str = "none",
+
     ):
         super().__init__()
+        self.skip_gating = False
         self.corruption_tag = corruption_tag
         if embedding_dropout is not None:
             self.emb_drop = nn.Dropout(embedding_dropout)
         self.emb_norm = nn.LayerNorm(embedding_dim)
 
         self.out_norm = nn.LayerNorm(embedding_dim)
+        # additional seq_len embeddings for padding timesteps
         self.timestep_emb = nn.Embedding(episode_len + seq_len, embedding_dim)
 
-        # 原始确定性嵌入
-        self.state_emb = nn.Linear(state_dim, embedding_dim) if not mlp_embedding else ResidualBlock(state_dim, embedding_dim)
-        self.action_emb = nn.Linear(action_dim, embedding_dim) if not mlp_embedding else ResidualBlock(action_dim, embedding_dim)
-        self.return_emb = nn.Linear(1, embedding_dim) if not mlp_embedding else ResidualBlock(1, embedding_dim)
-
+        if mlp_embedding:
+            self.state_emb = ResidualBlock(state_dim, embedding_dim)
+            self.action_emb = ResidualBlock(action_dim, embedding_dim)
+            self.return_emb = ResidualBlock(1, embedding_dim)
+        else:
+            self.state_emb = BayesianEmbedding(state_dim, embedding_dim)
+            self.action_emb = BayesianEmbedding(action_dim, embedding_dim)
+            self.return_emb = BayesianEmbedding(1, embedding_dim)
         effective_seq_len = 3 * seq_len
+
         self.blocks = nn.ModuleList(
             [
-                TransformerBlock(
-                    seq_len=effective_seq_len,
-                    embedding_dim=embedding_dim,
-                    num_heads=num_heads,
-                    attention_dropout=attention_dropout,
-                    residual_dropout=residual_dropout,
-                )
-                for _ in range(num_layers)
+            TransformerBlock(
+                seq_len=effective_seq_len,
+                embedding_dim=embedding_dim,
+                num_heads=num_heads,
+                attention_dropout=attention_dropout,
+                residual_dropout=residual_dropout,
+            )
+            for _ in range(num_layers)
             ]
         )
 
         self.predict_dropout = nn.Dropout(predict_dropout)
+
         self.use_stochastic = use_stochastic
         if self.use_stochastic:
             self.action_head = DiagGaussianActor(embedding_dim, action_dim)
@@ -383,7 +384,10 @@ class DecisionTransformer(nn.Module):
             num_layer = 2 if mlp_reward else 1
             self.reward_head = MLPBlock(embedding_dim, 1, num_layer)
 
+        self.log_lambda = nn.Parameter(torch.tensor(0.0))   # 初始化为 0，即 λ=1
+        self.log_lambda.requires_grad = False
         self.apply(self._init_weights)
+
         self.seq_len = seq_len
         self.embedding_dim = embedding_dim
         self.state_dim = state_dim
@@ -391,6 +395,7 @@ class DecisionTransformer(nn.Module):
         self.episode_len = episode_len
         self.embed_order = embed_order
         self.predict_reward = predict_reward
+
 
     @staticmethod
     def _init_weights(module: nn.Module):
@@ -402,58 +407,124 @@ class DecisionTransformer(nn.Module):
             torch.nn.init.zeros_(module.bias)
             torch.nn.init.ones_(module.weight)
 
+
+    def toggle_temperature_grad(self, mode: bool):
+        """
+        mode: True (解冻，允许更新), False (冻结，禁止更新)
+        """
+        # 遍历所有的 Transformer Block
+        for block in self.blocks:
+        # 检查是否有 attention 属性且 attention 有 log_temperature 参数
+            if hasattr(block, 'attention') and hasattr(block.attention, 'log_temperature'):
+            # 设置 requires_grad
+                block.attention.log_temperature.requires_grad = mode
+
+            # 如果是 False，最好手动清空一下现有的梯度，防止残留
+                if not mode and block.attention.log_temperature.grad is not None:
+                    block.attention.log_temperature.grad = None
+
+
+    def w_stochastic_action_loss(self, config, predicted_actions, actions, mask):
+        with torch.no_grad():
+            diff = torch.square(predicted_actions.mean.detach() - actions.detach()).mean(-1, keepdim=True)
+            weight = torch.exp(-config.wmse_coef[0] * diff)
+
+        mask = mask.unsqueeze(-1)
+        log_likelihood = predicted_actions.log_prob(actions.detach())
+        log_likelihood = (log_likelihood * weight * mask).mean()
+        entropy = (predicted_actions.entropy() * mask).mean()
+        if config.use_entropy:
+            entropy_reg = self.log_temperature.exp().detach()
+        else:
+            entropy_reg = 0
+        act_loss = -(log_likelihood + entropy_reg * entropy)
+        return act_loss, entropy
+
+
     def forward(
             self,
-            states: torch.Tensor,
-            actions: torch.Tensor,
-            returns_to_go: torch.Tensor,
-            time_steps: torch.Tensor,
-            padding_mask: Optional[torch.Tensor] = None,
+            states: torch.Tensor,  # [batch_size, seq_len, state_dim]
+            actions: torch.Tensor,  # [batch_size, seq_len, action_dim]
+            returns_to_go: torch.Tensor,  # [batch_size, seq_len]
+            time_steps: torch.Tensor,  # [batch_size, seq_len]
+            padding_mask: Optional[torch.Tensor] = None,  # [batch_size, seq_len]
     ):
         batch_size, seq_len = states.shape[0], states.shape[1]
+        # [batch_size, seq_len, emb_dim]
         time_emb = self.timestep_emb(time_steps)
+        # act_emb = self.action_emb(actions)
+        # returns_emb = self.return_emb(returns_to_go)
 
-        state_emb = self.state_emb(states)
-        act_emb = self.action_emb(actions)
-        returns_emb = self.return_emb(returns_to_go)
+        state_mu, state_logvar = self.state_emb(states)  # [B, T, E]
+        act_mu, act_logvar = self.action_emb(actions)
+        ret_mu, ret_logvar = self.return_emb(returns_to_go)
 
+        # 计算每个 token 的标量方差（取嵌入维度的均值）
+        state_var = state_logvar.exp().mean(dim=-1)  # [B, T]
+        act_var = act_logvar.exp().mean(dim=-1)
+        ret_var = ret_logvar.exp().mean(dim=-1)
+
+        # 按 embed_order 构造方差序列
         if self.embed_order == "rsa":
-            sequence = torch.stack([returns_emb, state_emb, act_emb], dim=1)
+            var_seq = torch.stack([ret_var, state_var, act_var], dim=1)  # [B, 3, T]
         elif self.embed_order == "sar":
-            sequence = torch.stack([state_emb, act_emb, returns_emb], dim=1)
+            var_seq = torch.stack([state_var, act_var, ret_var], dim=1)
         else:
-            raise ValueError(f"Invalid embedding order {self.embed_order}.")
+            raise ValueError(f"Invalid embed_order {self.embed_order}")
+        var_seq = var_seq.permute(0, 2, 1).reshape(batch_size, 3 * seq_len)  # [B, 3T]
+
+        # 构造均值嵌入序列
+        if self.embed_order == "rsa":
+            sequence = torch.stack([ret_mu, state_mu, act_mu], dim=1)
+        elif self.embed_order == "sar":
+            sequence = torch.stack([state_mu, act_mu, ret_mu], dim=1)
         sequence = sequence.permute(0, 2, 1, 3).reshape(batch_size, 3 * seq_len, self.embedding_dim)
         sequence = sequence + time_emb.repeat_interleave(3, dim=1)
 
         if padding_mask is not None:
+            # [batch_size, seq_len * 3], stack mask identically to fit the sequence
             padding_mask = (
                 torch.stack([padding_mask, padding_mask, padding_mask], dim=1)
                 .permute(0, 2, 1)
                 .reshape(batch_size, 3 * seq_len)
             )
 
+    # LayerNorm and Dropout (!!!) as in original implementation,
+    # while minGPT & huggingface uses only embedding dropout
         out = self.emb_norm(sequence)
         if hasattr(self, "emb_drop"):
             out = self.emb_drop(out)
 
         for block in self.blocks:
-            out = block(out, padding_mask=padding_mask)
+            out = block(out, padding_mask=padding_mask,
+                        var_seq=var_seq if not self.skip_gating else None,
+                        log_lambda=self.log_lambda if not self.skip_gating else None)
 
         out = self.out_norm(out)
+
         out = self.predict_dropout(out)
 
         if self.embed_order == "rsa":
             out_r_emb, out_s_emb, out_a_emb = out[:, 0::3], out[:, 1::3], out[:, 2::3]
         elif self.embed_order == "sar":
             out_s_emb, out_a_emb, out_r_emb = out[:, 0::3], out[:, 1::3], out[:, 2::3]
+        else:
+            raise ValueError(f"Invalid embedding order {self.embed_order}.")
 
         action_out = self.action_head(out_s_emb)
         if self.predict_reward:
             reward_out = self.reward_head(out_a_emb)
         else:
             reward_out = None
-        return action_out, reward_out
+        # 在 for block in self.blocks: 循环之后添加
+        # 保存最后一个 batch 的诊断信息（仅用于调试）
+        if hasattr(self, 'log_lambda') and var_seq is not None:
+            self._debug_lambda = torch.exp(self.log_lambda).item()
+            self._debug_var_mean = var_seq.mean().item()
+            self._debug_var_max = var_seq.max().item()
+            self._debug_var_min = var_seq.min().item()
+        return action_out, reward_out, (state_mu, state_logvar, act_mu, act_logvar, ret_mu, ret_logvar)
+
 class NSAOPObsAttacker:
     """
     非平稳对抗性观测摄动 (NSAOP) 攻击器

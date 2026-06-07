@@ -3,6 +3,7 @@ from typing import Callable, Optional
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributions.normal import Normal
 
 
@@ -184,32 +185,87 @@ class TransformerBlock(nn.Module):
         )
         self.seq_len = seq_len
         self.batch_first = True
+        self.num_heads = num_heads
+        self.embedding_dim = embedding_dim
 
     # [batch_size, seq_len, emb_dim] -> [batch_size, seq_len, emb_dim]
     def forward(
-            self, x: torch.Tensor, padding_mask: Optional[torch.Tensor] = None, return_attention: bool = False
+            self, x: torch.Tensor,
+            padding_mask: Optional[torch.Tensor] = None,
+            return_attention: bool = False,
+            var_seq: Optional[torch.Tensor] = None,      # 新增：不确定性方差序列 [B, L]
+            log_lambda: Optional[torch.Tensor] = None,    # 新增：可学习的缩放因子
     ) -> torch.Tensor:
         causal_mask = self.causal_mask[: x.shape[1], : x.shape[1]]
 
         norm_x = self.norm1(x)
 
-        is_batched = x.dim() == 3
-        if self.batch_first and is_batched:
-            norm_x = norm_x.transpose(1, 0)
-        attention_out = self.attention(
-            query=norm_x,
-            key=norm_x,
-            value=norm_x,
-            attn_mask=causal_mask,
-            key_padding_mask=padding_mask,
-            need_weights=False,
-        )[0]
-        if self.batch_first and is_batched:
-            attention_out = attention_out.transpose(1, 0)
+        # 选择注意力计算路径
+        if var_seq is not None and log_lambda is not None:
 
-        # by default pytorch attention does not use dropout
-        # after final attention weights projection, while minGPT does:
-        # https://github.com/karpathy/minGPT/blob/7218bcfa527c65f164de791099de715b81a95106/mingpt/model.py#L70 # noqa
+            B, L, E = norm_x.shape
+
+            # 使用 in_proj_weight 进行 QKV 投影（兼容旧版 PyTorch）
+            qkv = F.linear(norm_x, self.attention.in_proj_weight, self.attention.in_proj_bias)
+            # qkv 形状 [B, L, 3*E] 或 [L, B, 3*E] 根据 batch_first 调整
+            if self.batch_first:
+                qkv = qkv.reshape(B, L, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)  # [3, B, h, L, d_k]
+            else:
+                qkv = qkv.reshape(L, B, 3, self.num_heads, -1).permute(2, 1, 3, 0, 4)
+            q, k, v = qkv[0], qkv[1], qkv[2]  # 每个 [B, h, L, d_k] 或 [B, h, L, d_k] 需调整维度
+            # 统一为 [B, h, L, d_k]
+            if not self.batch_first:
+                q = q.permute(1, 0, 2, 3)  # [B, h, L, d_k]
+                k = k.permute(1, 0, 2, 3)
+                v = v.permute(1, 0, 2, 3)
+
+            d_k = q.size(-1)
+            scale = d_k ** -0.5
+            attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale
+
+            # 不确定性门控 (修正版：使用加法惩罚)
+            penalty = torch.exp(log_lambda) * var_seq  # λ * σ²
+            penalty = penalty.unsqueeze(1).unsqueeze(2)  # [B, 1, 1, L]
+            attn_weights = attn_weights - penalty  # 加性惩罚
+
+            # 因果掩码
+            mask = self.causal_mask[:L, :L].unsqueeze(0).unsqueeze(0)  # [1, 1, L, L]
+            attn_weights = attn_weights.masked_fill(mask, float('-inf'))
+
+            # padding 掩码
+            if padding_mask is not None:
+                key_mask = padding_mask.unsqueeze(1).unsqueeze(2)  # [B, 1, 1, L]
+                attn_weights = attn_weights.masked_fill(key_mask, float('-inf'))
+
+            attn_weights = torch.softmax(attn_weights, dim=-1)
+            # 可选用 attention dropout
+            attn_weights = torch.dropout(attn_weights, p=self.attention.dropout, train=self.training)
+
+            attn_out = torch.matmul(attn_weights, v)  # [B, h, L, d_k]
+            attn_out = attn_out.transpose(1, 2).contiguous().view(B, L, E)
+
+            # 输出投影
+            attention_out = F.linear(attn_out, self.attention.out_proj.weight, self.attention.out_proj.bias)
+
+        else:
+            # ===== 原始注意力（RDT 默认路径）=====
+            is_batched = x.dim() == 3
+            if self.batch_first and is_batched:
+                norm_x = norm_x.transpose(1, 0)
+
+            attention_out = self.attention(
+                query=norm_x,
+                key=norm_x,
+                value=norm_x,
+                attn_mask=causal_mask,
+                key_padding_mask=padding_mask,
+                need_weights=False,
+            )[0]
+
+            if self.batch_first and is_batched:
+                attention_out = attention_out.transpose(1, 0)
+
+        # 残差连接 + dropout（两条路径后统一处理）
         x = x + self.drop(attention_out)
         x = x + self.mlp(self.norm2(x))
         return x
