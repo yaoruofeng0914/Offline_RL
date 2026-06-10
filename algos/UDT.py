@@ -328,6 +328,7 @@ def train(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = dt_func.SequenceDataset(config, logger)
+    config.state_std = dataset.state_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 
@@ -551,6 +552,7 @@ def test(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = dt_func.SequenceDataset(config, logger)
+    config.state_std = dataset.state_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 

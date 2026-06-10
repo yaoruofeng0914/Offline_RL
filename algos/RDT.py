@@ -102,6 +102,7 @@ class TrainConfig:
     froce_attack: int = 0
     # NSAOP 测试模式
     test_attack_mode: str = ""  # 留空表示跟随 corruption_mode，设为 "nsaop" 启用新基准
+    nsaop_eps_coeff: float = 1.0
 
     def __post_init__(self):
         # train
@@ -118,7 +119,7 @@ class TrainConfig:
             if self.corruption_tag == "rew":
                 self.corruption_obs = 0.0
                 self.corruption_act = 0.0
-                self.corruption_rew = 1.0  
+                self.corruption_rew = 1.0
             # target_returns and reward_scale
             if self.env.startswith("antmaze"):
                 self.target_returns = [1.0, 0.5]
@@ -375,6 +376,7 @@ def train(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = dt_func.SequenceDataset(config, logger)
+    config.state_std = dataset.state_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 
@@ -424,7 +426,7 @@ def train(config: TrainConfig, logger: Logger):
     else:
         eval_attacker = None
         print("eval_attack: False")
-    
+
     if config.debug_eval:
         model.eval()
         eval_log = dt_func.eval_fn(config, env, model, eval_attacker)
@@ -520,7 +522,7 @@ def train(config: TrainConfig, logger: Logger):
                         torch.save(
                             model.state_dict(),
                             os.path.join(logger.get_dir(), f"best_policy_50.pth"),
-                        )        
+                        )
             if epoch == config.num_epochs:
                 with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
                         f.write(f"{now_score:.4f}_{epoch}")
@@ -545,6 +547,7 @@ def test(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = dt_func.SequenceDataset(config, logger)
+    config.state_std = dataset.state_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 
@@ -572,10 +575,10 @@ def test(config: TrainConfig, logger: Logger):
     else:
         eval_attacker = None
         print("eval_attack: False")
-            
+
     all_files = os.listdir(config.checkpoint_dir)
     model_epoches = [
-        f for f in all_files 
+        f for f in all_files
         if f.startswith("policy") and f.endswith(".pth")
     ]
     model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
@@ -585,19 +588,19 @@ def test(config: TrainConfig, logger: Logger):
     for i, model_epoch in enumerate(model_epoches):
         epoch = int(model_epoch.split(".")[0].split("_")[1])
         print(f"eval epoch: {epoch}")
-        
+
         # model
         model = set_model(config)
-        model.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch)), strict=False)  
+        model.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch)), strict=False)
         model.eval()
         # logger.info(f"Network: \n{str(model)}")
         # logger.info(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
-    
+
         eval_log = dt_func.eval_fn(config, env, model, eval_attacker)
         for k, v in eval_log.items():
             logger.record(k, v)
         logger.dump(0)
-    
+
         now_score = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean"], eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean"])
         if i == 0:
             with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "w") as f:
@@ -613,7 +616,7 @@ def test(config: TrainConfig, logger: Logger):
             if now_score > best_score_50:
                 best_score_50 = now_score
                 with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
-                    f.write(f"{best_score_50:.4f}_{epoch}")  
+                    f.write(f"{best_score_50:.4f}_{epoch}")
         if epoch == config.num_epochs:
             with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
                 f.write(f"{now_score:.4f}_{epoch}")
