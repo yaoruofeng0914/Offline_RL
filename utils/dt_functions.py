@@ -78,6 +78,7 @@ def load_d4rl_trajectories(
         "obs_mean": state_mean,
         "obs_std": state_std,
         "traj_lens": np.array(traj_len),
+        "rew_std": dataset["rewards"].std() + 1e-6,
     }
     return traj, info
 
@@ -94,6 +95,7 @@ class SequenceDataset:
 
         self.state_mean = info["obs_mean"]
         self.state_std = info["obs_std"]
+        self.rew_std = info["rew_std"]
         self.sample_prob = info["traj_lens"] / info["traj_lens"].sum()
         self.float_dtype = np.float32
 
@@ -163,21 +165,6 @@ class SequenceDataset:
 
 
 # Training and evaluation logic
-class BayesianEmbedding(nn.Module):
-    """输出高斯分布参数 (mean, log_var) 的贝叶斯嵌入层"""
-
-    def __init__(self, input_dim, embed_dim):
-        super().__init__()
-        self.mean = nn.Linear(input_dim, embed_dim)
-        self.logvar = nn.Linear(input_dim, embed_dim)
-
-    def forward(self, x):
-        mu = self.mean(x)
-        logvar = self.logvar(x)
-        logvar = torch.clamp(logvar, -10, 5)  # 防止数值爆炸
-        return mu, logvar
-
-
 @torch.no_grad()
 def eval_rollout(
         model: nn.Module,
@@ -209,13 +196,10 @@ def eval_rollout(
     nsaop_act_attacker = None
     nsaop_rew_attacker = None
 
-    # 统一定义全场相对强度系数 alpha = 1.0 (写进论文的核心标尺)
-    # 如果 config 里有 nsaop_eps_coeff 就用 config 的，没有默认 1.0
-    global_eps_coeff = getattr(config, 'nsaop_eps_coeff', 1.0)
+    global_eps_coeff = getattr(config, 'nsaop_eps_coeff', 1.0) if config else 1.0
 
     if hasattr(config, 'test_attack_mode') and config.test_attack_mode == "nsaop":
         if eval_attack_tag == "obs":
-            # 尝试从 config 获取 state_std，如果没存就不用（对齐物理维度）
             env_state_std = getattr(config, 'state_std', None)
             nsaop_obs_attacker = NSAOPObsAttacker(
                 state_dim=model.state_dim,
@@ -231,15 +215,16 @@ def eval_rollout(
                 device=device
             )
         elif eval_attack_tag == "rew":
+            env_rew_std = getattr(config, 'rew_std', 1.0) if config else 1.0
             nsaop_rew_attacker = NSAOPRewAttacker(
-                reward_scale=config.reward_scale,  # 读取 DT 的 reward_scale
+                rew_std=env_rew_std,
+                reward_scale=config.reward_scale if config else 1.0,
                 eps_coeff=global_eps_coeff,
                 device=device
             )
 
     obs = env.reset()
 
-    # NSAOP: 替换初始观测攻击
     if nsaop_obs_attacker is not None:
         obs = nsaop_obs_attacker.attack_obs(obs)
     elif eval_attacker is not None and eval_attack_tag == "obs":
@@ -249,11 +234,10 @@ def eval_rollout(
     states[:, 0] = torch.as_tensor(obs, device=device)
     returns[:, 0] = torch.as_tensor(target_return, device=device)
 
-    # cannot step higher than model episode len, as timestep embeddings will crash
     episode_return, episode_len = 0.0, 0.0
-    smoothed_action = None
+
     for step in range(model.episode_len):
-        predicted = model(  # fix this noqa!!!
+        predicted = model(
             states[:, : step + 1][:, -model.seq_len:],
             actions[:, : step + 1][:, -model.seq_len:],
             returns[:, : step + 1][:, -model.seq_len:],
@@ -264,15 +248,8 @@ def eval_rollout(
             predicted_actions = predicted_actions.mean
         predicted_action = predicted_actions[0, -1].cpu().numpy()
 
-        # 1. 【先平滑】模拟底层控制器发出的指令
-        if smoothed_action is None:
-            smoothed_action = predicted_action.copy()
-        else:
-            alpha = 0.5
-            smoothed_action = alpha * smoothed_action + (1 - alpha) * predicted_action
-        predicted_action = smoothed_action
+        # [彻底移除平滑逻辑] 保持 RDT 纯净测试
 
-        # 2. 【后攻击】模拟物理执行器在落实该动作时发生偏差故障
         if nsaop_act_attacker is not None:
             predicted_action = nsaop_act_attacker.attack_act(predicted_action)
         elif eval_attacker is not None and eval_attack_tag == "act":
@@ -280,7 +257,6 @@ def eval_rollout(
             if attack_flag < eval_corruption_rate:
                 predicted_action = eval_attacker.attack_act(predicted_action)
 
-        # 3. 截断边界并输入环境
         predicted_action = np.clip(predicted_action, *action_range)
         next_state, reward, done, info = env.step(predicted_action)
         episode_return += reward
@@ -293,7 +269,6 @@ def eval_rollout(
             if attack_flag < eval_corruption_rate:
                 next_state = eval_attacker.attack_obs(next_state)
 
-        # NSAOP-rew: 替换奖励攻击
         if nsaop_rew_attacker is not None:
             reward = nsaop_rew_attacker.attack_rew(reward)
         elif eval_attacker is not None and eval_attack_tag == "rew":
@@ -301,7 +276,6 @@ def eval_rollout(
             if attack_flag < eval_corruption_rate:
                 reward = eval_attacker.attack_rew(reward)
 
-        # at step t, we predict a_t, get s_{t + 1}, r_{t + 1}
         actions[:, step] = torch.as_tensor(predicted_action)
         states[:, step + 1] = torch.as_tensor(next_state)
         returns[:, step + 1] = torch.as_tensor(returns[:, step] - reward)
@@ -327,9 +301,8 @@ def eval_fn(config, env, model, eval_attacker=None):
                 eval_attack_tag=eval_attack_tag,
                 device=config.device,
                 use_stochastic=use_stochastic,
-                config=config,
+                config=config,  # 确保传入 config 以支持 NSAOP
             )
-            # unscale for logging & correct normalized score computation
             eval_returns.append(eval_return / config.reward_scale)
 
         eval_returns = np.array(eval_returns)
@@ -375,7 +348,6 @@ class DecisionTransformer(nn.Module):
         self.out_norm = nn.LayerNorm(embedding_dim)
         self.timestep_emb = nn.Embedding(episode_len + seq_len, embedding_dim)
 
-        # 原始确定性嵌入
         self.state_emb = nn.Linear(state_dim, embedding_dim) if not mlp_embedding else ResidualBlock(state_dim,
                                                                                                      embedding_dim)
         self.action_emb = nn.Linear(action_dim, embedding_dim) if not mlp_embedding else ResidualBlock(action_dim,
@@ -383,6 +355,7 @@ class DecisionTransformer(nn.Module):
         self.return_emb = nn.Linear(1, embedding_dim) if not mlp_embedding else ResidualBlock(1, embedding_dim)
 
         effective_seq_len = 3 * seq_len
+
         self.blocks = nn.ModuleList(
             [
                 TransformerBlock(
@@ -473,6 +446,8 @@ class DecisionTransformer(nn.Module):
             out_r_emb, out_s_emb, out_a_emb = out[:, 0::3], out[:, 1::3], out[:, 2::3]
         elif self.embed_order == "sar":
             out_s_emb, out_a_emb, out_r_emb = out[:, 0::3], out[:, 1::3], out[:, 2::3]
+        else:
+            raise ValueError(f"Invalid embedding order {self.embed_order}.")
 
         action_out = self.action_head(out_s_emb)
         if self.predict_reward:
@@ -490,8 +465,6 @@ class DecisionTransformer(nn.Module):
 class NSAOPObsAttacker:
     """
     非平稳观测攻击器：姿态依赖的传感器畸变
-    方向耦合：取决于当前观测状态的符号 sign(obs_t)
-    强度耦合：统一系数 eps_coeff * 状态维度的标准差 state_std
     """
 
     def __init__(
@@ -510,7 +483,6 @@ class NSAOPObsAttacker:
         self.momentum = momentum
         self.eps_coeff = eps_coeff
         self.device = device
-
         self.m_state = 0
         self.accumulated_drift = torch.zeros(state_dim, device=device)
 
@@ -532,7 +504,6 @@ class NSAOPObsAttacker:
 
         obs_tensor = torch.tensor(obs, dtype=torch.float32, device=self.device)
         direction = torch.sign(obs_tensor + 1e-8)
-
         scaled_eps = self.eps_coeff * self.state_std
 
         self.accumulated_drift = (
@@ -545,8 +516,6 @@ class NSAOPObsAttacker:
 class NSAOPActAttacker:
     """
     非平稳动作攻击器：动作耦合的执行器疲劳
-    方向耦合：取决于当前输出动作的符号 sign(act_t)
-    强度耦合：统一系数 eps_coeff * 动作空间尺度 action_scale
     """
 
     def __init__(
@@ -566,7 +535,6 @@ class NSAOPActAttacker:
         self.momentum = momentum
         self.eps_coeff = eps_coeff
         self.device = device
-
         self.m_state = 0
         self.accumulated_drift = torch.zeros(action_dim, device=device)
 
@@ -584,14 +552,12 @@ class NSAOPActAttacker:
 
         action_tensor = torch.tensor(action, dtype=torch.float32, device=self.device)
         direction = torch.sign(action_tensor + 1e-8)
-
         scaled_eps = self.eps_coeff * self.action_scale
 
         self.accumulated_drift = (
                 self.momentum * self.accumulated_drift
                 + (1 - self.momentum) * scaled_eps * direction
         )
-
         perturbed = action_tensor + self.accumulated_drift
         return np.clip(perturbed.cpu().numpy(), -self.action_scale, self.action_scale)
 
@@ -599,12 +565,11 @@ class NSAOPActAttacker:
 class NSAOPRewAttacker:
     """
     非平稳奖励攻击器：性能耦合的评估退化
-    方向耦合：与当前真实奖励符号相反 -sign(rew_t)
-    强度耦合：统一系数 eps_coeff / 奖励缩放比例 reward_scale
     """
 
     def __init__(
             self,
+            rew_std: float = 1.0,
             reward_scale: float = 1.0,
             burst_prob: float = 0.1,
             recover_prob: float = 0.3,
@@ -617,11 +582,9 @@ class NSAOPRewAttacker:
         self.momentum = momentum
         self.eps_coeff = eps_coeff
         self.device = device
-
         self.m_state = 0
         self.accumulated_drift = 0.0
-
-        self.base_eps = self.eps_coeff / (reward_scale + 1e-8)
+        self.base_eps = self.eps_coeff * rew_std * reward_scale
 
     def step(self):
         if self.m_state == 0:
@@ -636,7 +599,6 @@ class NSAOPRewAttacker:
             return reward
 
         direction = -np.sign(reward) if reward != 0 else -1.0
-
         self.accumulated_drift = (
                 self.momentum * self.accumulated_drift
                 + (1 - self.momentum) * self.base_eps * direction

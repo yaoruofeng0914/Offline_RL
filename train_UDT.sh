@@ -71,8 +71,7 @@ for ENV in "${ENVS[@]}"; do
                     --corruption_mode "$MODE" \
                     --corruption_tag "$TAG" \
                     --corruption_rate 0.3 \
-                    --eval_attack True \
-                    --test_attack_mode "nsaop" \
+                    --eval_attack True            --test_attack_mode "nsaop" \
                     --use_wandb 0 \
                     --save_model True \
                     > "$LOG_FILE" 2>&1 &

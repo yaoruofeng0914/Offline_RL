@@ -78,6 +78,7 @@ def load_d4rl_trajectories(
         "obs_mean": state_mean,
         "obs_std": state_std,
         "traj_lens": np.array(traj_len),
+        "rew_std": dataset["rewards"].std() + 1e-6,
     }
     return traj, info
 
@@ -94,6 +95,7 @@ class SequenceDataset:
 
         self.state_mean = info["obs_mean"]
         self.state_std = info["obs_std"]
+        self.rew_std = info["rew_std"]
         self.sample_prob = info["traj_lens"] / info["traj_lens"].sum()
         self.float_dtype = np.float32
 
@@ -228,8 +230,10 @@ def eval_rollout(
                 device=device
             )
         elif eval_attack_tag == "rew":
+            env_rew_std = getattr(config, 'rew_std', 1.0) if config else 1.0
             nsaop_rew_attacker = NSAOPRewAttacker(
-                reward_scale=config.reward_scale,
+                rew_std=env_rew_std,
+                reward_scale=config.reward_scale if config else 1.0,
                 eps_coeff=global_eps_coeff,
                 device=device
             )
@@ -247,7 +251,6 @@ def eval_rollout(
     returns[:, 0] = torch.as_tensor(target_return, device=device)
 
     episode_return, episode_len = 0.0, 0.0
-    smoothed_action = None  # 动作平滑初始化
 
     for step in range(model.episode_len):
         predicted = model(
@@ -260,14 +263,6 @@ def eval_rollout(
         if use_stochastic:
             predicted_actions = predicted_actions.mean
         predicted_action = predicted_actions[0, -1].cpu().numpy()
-
-        # 1. 【先平滑】模拟底层控制器发出的平滑指令
-        if smoothed_action is None:
-            smoothed_action = predicted_action.copy()
-        else:
-            alpha = 0.5
-            smoothed_action = alpha * smoothed_action + (1 - alpha) * predicted_action
-        predicted_action = smoothed_action
 
         # 2. 【后攻击】模拟物理执行器在落实该动作时发生偏差故障
         if nsaop_act_attacker is not None:
@@ -653,6 +648,7 @@ class NSAOPRewAttacker:
 
     def __init__(
             self,
+            rew_std: float = 1.0,
             reward_scale: float = 1.0,
             burst_prob: float = 0.1,
             recover_prob: float = 0.3,
@@ -669,7 +665,7 @@ class NSAOPRewAttacker:
         self.m_state = 0
         self.accumulated_drift = 0.0
 
-        self.base_eps = self.eps_coeff / (reward_scale + 1e-8)
+        self.base_eps = self.eps_coeff * rew_std * reward_scale
 
     def step(self):
         if self.m_state == 0:
