@@ -79,6 +79,7 @@ def load_d4rl_trajectories(
         "obs_std": state_std,
         "traj_lens": np.array(traj_len),
         "rew_std": dataset["rewards"].std() + 1e-6,
+        "act_std": dataset["actions"].std(0, keepdims=True) + 1e-6,
     }
     return traj, info
 
@@ -96,6 +97,7 @@ class SequenceDataset:
         self.state_mean = info["obs_mean"]
         self.state_std = info["obs_std"]
         self.rew_std = info["rew_std"]
+        self.act_std = info["act_std"]
         self.sample_prob = info["traj_lens"] / info["traj_lens"].sum()
         self.float_dtype = np.float32
 
@@ -166,17 +168,27 @@ class SequenceDataset:
 
 # Training and evaluation logic
 class BayesianEmbedding(nn.Module):
-    """输出高斯分布参数 (mean, log_var) 的贝叶斯嵌入层"""
-
-    def __init__(self, input_dim, embed_dim):
+    """输出高斯分布参数 (mean, log_var) 的贝叶斯嵌入层（含谱归一化）"""
+    def __init__(self, input_dim, embed_dim, hidden_dim=None):
         super().__init__()
-        self.mean = nn.Linear(input_dim, embed_dim)
-        self.logvar = nn.Linear(input_dim, embed_dim)
+        # 默认隐藏层维度与 embed_dim 相同，保持表达能力
+        if hidden_dim is None:
+            hidden_dim = embed_dim
+        self.mean_net = nn.Sequential(
+            nn.utils.spectral_norm(nn.Linear(input_dim, hidden_dim)),
+            nn.ReLU(),
+            nn.utils.spectral_norm(nn.Linear(hidden_dim, embed_dim))
+        )
+        self.logvar_net = nn.Sequential(
+            nn.utils.spectral_norm(nn.Linear(input_dim, hidden_dim)),
+            nn.ReLU(),
+            nn.utils.spectral_norm(nn.Linear(hidden_dim, embed_dim))
+        )
 
     def forward(self, x):
-        mu = self.mean(x)
-        logvar = self.logvar(x)
-        logvar = torch.clamp(logvar, -10, 5)  # 防止数值爆炸
+        mu = self.mean_net(x)
+        logvar = self.logvar_net(x)
+        logvar = torch.clamp(logvar, -10, 5)   # 防止数值爆炸
         return mu, logvar
 
 
@@ -223,9 +235,15 @@ def eval_rollout(
                 device=device
             )
         elif eval_attack_tag == "act":
+            action_low = env.action_space.low
+            action_high = env.action_space.high
+            # 获取 config 中的 action_std，如果没有则为 None，由攻击器内部进行 0.5 的合理预估
+            env_act_std = getattr(config, 'action_std', None)
             nsaop_act_attacker = NSAOPActAttacker(
                 action_dim=model.action_dim,
-                action_scale=float(env.action_space.high.max()),
+                action_std=env_act_std,  # <--- 使用 std 保持三通道统一信噪比
+                action_low=action_low,  # <--- 保留您优秀的动态边界逻辑
+                action_high=action_high,
                 eps_coeff=global_eps_coeff,
                 device=device
             )
@@ -530,11 +548,14 @@ class DecisionTransformer(nn.Module):
 # SAR-Coupled Non-Stationary Drift (相对强度统一版)
 # ==========================================
 
+# ==========================================
+# 统一架构: 状态-动作-奖励耦合的非平稳漂移攻击
+# SAR-Coupled Non-Stationary Drift (基于协方差对角线的无量纲统一版 + 物理截断)
+# ==========================================
+
 class NSAOPObsAttacker:
     """
-    非平稳观测攻击器：姿态依赖的传感器畸变
-    方向耦合：取决于当前观测状态的符号 sign(obs_t)
-    强度耦合：统一系数 eps_coeff * 状态维度的标准差 state_std
+    非平稳观测攻击器：基于状态标准差的无量纲统一缩放方案
     """
 
     def __init__(
@@ -576,26 +597,31 @@ class NSAOPObsAttacker:
         obs_tensor = torch.tensor(obs, dtype=torch.float32, device=self.device)
         direction = torch.sign(obs_tensor + 1e-8)
 
-        scaled_eps = self.eps_coeff * self.state_std
+        # 无量纲缩放：全局系数 * 状态标准差 * 方向
+        scaled_eps = self.eps_coeff * self.state_std * direction
 
         self.accumulated_drift = (
                 self.momentum * self.accumulated_drift
-                + (1 - self.momentum) * scaled_eps * direction
+                + (1 - self.momentum) * scaled_eps
         )
+
+        # 物理饱和截断限制：防止长序列发散，限制在 3 倍标准差以内
+        self.accumulated_drift = torch.clamp(self.accumulated_drift, -3.0 * self.state_std, 3.0 * self.state_std)
+
         return (obs_tensor + self.accumulated_drift).cpu().numpy()
 
 
 class NSAOPActAttacker:
     """
-    非平稳动作攻击器：动作耦合的执行器疲劳
-    方向耦合：取决于当前输出动作的符号 sign(act_t)
-    强度耦合：统一系数 eps_coeff * 动作空间尺度 action_scale
+    非平稳动作攻击器：基于动作自然标准差的无量纲统一缩放方案 + 动态环境边界
     """
 
     def __init__(
             self,
             action_dim: int,
-            action_scale: float = 1.0,
+            action_std: Optional[np.ndarray] = None,  # 统一使用 std
+            action_low: Optional[np.ndarray] = None,
+            action_high: Optional[np.ndarray] = None,
             burst_prob: float = 0.1,
             recover_prob: float = 0.3,
             momentum: float = 0.85,
@@ -603,15 +629,26 @@ class NSAOPActAttacker:
             device: str = "cpu"
     ):
         self.action_dim = action_dim
-        self.action_scale = action_scale
         self.burst_prob = burst_prob
         self.recover_prob = recover_prob
         self.momentum = momentum
         self.eps_coeff = eps_coeff
         self.device = device
-
         self.m_state = 0
         self.accumulated_drift = torch.zeros(action_dim, device=device)
+
+        # 1. 统一信噪比基准：若未提供，预估为 0.5
+        if action_std is None:
+            action_std = np.ones(action_dim) * 0.5
+        self.action_std = torch.tensor(action_std, dtype=torch.float32, device=device).view(-1)
+
+        # 2. 真实环境边界
+        if action_low is None:
+            action_low = -np.ones(action_dim)
+        if action_high is None:
+            action_high = np.ones(action_dim)
+        self.action_low = torch.tensor(action_low, dtype=torch.float32, device=device)
+        self.action_high = torch.tensor(action_high, dtype=torch.float32, device=device)
 
     def step(self):
         if self.m_state == 0:
@@ -628,22 +665,27 @@ class NSAOPActAttacker:
         action_tensor = torch.tensor(action, dtype=torch.float32, device=self.device)
         direction = torch.sign(action_tensor + 1e-8)
 
-        scaled_eps = self.eps_coeff * self.action_scale
+        # 【核心修正】无量纲缩放：全局系数 * 动作标准差 * 方向
+        scaled_eps = self.eps_coeff * self.action_std * direction
 
         self.accumulated_drift = (
                 self.momentum * self.accumulated_drift
-                + (1 - self.momentum) * scaled_eps * direction
+                + (1 - self.momentum) * scaled_eps
         )
 
-        perturbed = action_tensor + self.accumulated_drift
-        return np.clip(perturbed.cpu().numpy(), -self.action_scale, self.action_scale)
+        # 【核心修正】内部物理饱和截断限制：防止漂移无限发散 (3 倍标准差)
+        self.accumulated_drift = torch.clamp(self.accumulated_drift, -3.0 * self.action_std, 3.0 * self.action_std)
 
+        perturbed = action_tensor + self.accumulated_drift
+
+        # 输出给环境前执行动态硬边界截断
+        return np.clip(perturbed.cpu().numpy(),
+                       self.action_low.cpu().numpy(),
+                       self.action_high.cpu().numpy())
 
 class NSAOPRewAttacker:
     """
-    非平稳奖励攻击器：性能耦合的评估退化
-    方向耦合：与当前真实奖励符号相反 -sign(rew_t)
-    强度耦合：统一系数 eps_coeff / 奖励缩放比例 reward_scale
+    非平稳奖励攻击器：基于奖励标准差的无量纲统一缩放方案
     """
 
     def __init__(
@@ -665,7 +707,9 @@ class NSAOPRewAttacker:
         self.m_state = 0
         self.accumulated_drift = 0.0
 
+        # 对齐统一量纲缩放
         self.base_eps = self.eps_coeff * rew_std * reward_scale
+        self.rew_std_scaled = rew_std * reward_scale
 
     def step(self):
         if self.m_state == 0:
@@ -680,9 +724,14 @@ class NSAOPRewAttacker:
             return reward
 
         direction = -np.sign(reward) if reward != 0 else -1.0
+        scaled_eps = self.base_eps * direction
 
         self.accumulated_drift = (
                 self.momentum * self.accumulated_drift
-                + (1 - self.momentum) * self.base_eps * direction
+                + (1 - self.momentum) * scaled_eps
         )
+
+        # 物理饱和截断限制：防止奖励信号完全崩溃
+        self.accumulated_drift = np.clip(self.accumulated_drift, -3.0 * self.rew_std_scaled, 3.0 * self.rew_std_scaled)
+
         return reward + self.accumulated_drift
