@@ -238,7 +238,7 @@ def eval_rollout(
             action_low = env.action_space.low
             action_high = env.action_space.high
             # 获取 config 中的 action_std，如果没有则为 None，由攻击器内部进行 0.5 的合理预估
-            env_act_std = getattr(config, 'action_std', None)
+            env_act_std = getattr(config, 'act_std', None)
             nsaop_act_attacker = NSAOPActAttacker(
                 action_dim=model.action_dim,
                 action_std=env_act_std,  # <--- 使用 std 保持三通道统一信噪比

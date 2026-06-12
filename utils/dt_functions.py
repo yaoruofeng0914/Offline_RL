@@ -97,6 +97,7 @@ class SequenceDataset:
         self.state_mean = info["obs_mean"]
         self.state_std = info["obs_std"]
         self.rew_std = info["rew_std"]
+        self.act_std = info["act_std"]
         self.sample_prob = info["traj_lens"] / info["traj_lens"].sum()
         self.float_dtype = np.float32
 
@@ -212,7 +213,7 @@ def eval_rollout(
             # 动态获取环境边界与动作标准差
             action_low = env.action_space.low
             action_high = env.action_space.high
-            env_act_std = getattr(config, 'action_std', None)
+            env_act_std = getattr(config, 'act_std', None)
             nsaop_act_attacker = NSAOPActAttacker(
                 action_dim=model.action_dim,
                 action_std=env_act_std,
