@@ -61,7 +61,7 @@ class TrainConfig:
     batch_size: int = 64
     update_steps: int = 100_000
     reward_scale: float = 0.001
-    normalize: bool = False  # Normalize states
+    normalize: bool = True # Normalize states
     normalize_reward: bool = False  # Normalize reward
     recalculate_return: bool = False
     # evaluation params
@@ -94,13 +94,13 @@ class TrainConfig:
     corruption_next_obs: float = 0.0  # 0 or 1
     corruption_rate: float = 0.3
     use_original: int = 0  # 0 or 1
-    use_original: int = 0  # 0 or 1
     same_index: int = 0
     froce_attack: int = 0
 
     test_attack_mode: str = ""   # 留空表示跟随 corruption_mode，设为 "nsaop" 启用新基准
 
     beta: float = 0.00001   # KL散度正则化系数
+    use_udt: bool = True
 
     # ========== 新增：RDT 训练策略参数 ==========
     loss_fn: str = "wmse"                   # 使用 WMSE 损失
@@ -266,6 +266,11 @@ def set_model(config: TrainConfig):
         attention_dropout=config.attention_dropout,
         residual_dropout=config.residual_dropout,
         embedding_dropout=config.embedding_dropout,
+        mlp_embedding=config.mlp_embedding,
+        mlp_head=config.mlp_head,
+        mlp_reward=config.mlp_reward,
+        use_udt=config.use_udt,
+        embed_order=config.embed_order,
     ).to(config.device)
     return model
 
@@ -408,7 +413,7 @@ def train(config: TrainConfig, logger: Logger):
         for step in trange(config.num_updates_on_epoch, desc="Epoch", leave=False):
             log_dict = {}
             # batch = next(trainloader_iter)
-            batch = dataset.get_batch(config.batch_size)
+            batch = dataset.get_batch(config.batch_size, config.recalculate_return)
             states, actions, returns, rewards, time_steps, mask, attack_mask, traj_indexs = [b.to(config.device) for b
                                                                                              in batch]
             padding_mask = ~mask.to(torch.bool)
@@ -423,7 +428,7 @@ def train(config: TrainConfig, logger: Logger):
             predicted_actions = predicted[0]
             predicted_rewards = predicted[1]  # 奖励预测，WMSE 和异常值校正需要
             # UDT 特有的嵌入参数
-            state_mu, state_logvar, act_mu, act_logvar, ret_mu, ret_logvar = predicted[2]
+            udt_info = predicted[2]
 
             # ========== RDT 风格的加权均方误差 (WMSE) ==========
             def wmse_loss(pred, target, mask, coef):

@@ -26,7 +26,7 @@ SEEDS=(
 #1
 )
 
-LOG_DIR="full_logs_udt"          # 改为 UDT 日志目录
+LOG_DIR="full_logs_rdt"          # 1. 改为 RDT 日志目录
 mkdir -p "$LOG_DIR"
 
 MAX_PARALLEL=3
@@ -64,8 +64,8 @@ for ENV in "${ENVS[@]}"; do
 
                 LOG_FILE="${LOG_DIR}/${ENV}_${MODE}_${TAG}_${SEED}.txt"
 
-                # 关键：添加 --test_attack_mode nsaop，启用训练时 NSAOP 评估
-                python algos/UDT.py \
+                # 2. 调用 RDT.py，并保留 NSAOP 评估模式
+                python algos/RDT.py \
                     --env "$ENV" \
                     --seed "$SEED" \
                     --corruption_mode "$MODE" \
@@ -75,7 +75,6 @@ for ENV in "${ENVS[@]}"; do
                     --test_attack_mode "nsaop" \
                     --use_wandb 0 \
                     --save_model True \
-                    --use_udt False \
                     > "$LOG_FILE" 2>&1 &
 
                 let current_batch++
@@ -92,6 +91,8 @@ for ENV in "${ENVS[@]}"; do
         done
     done
 done
+
+# 3. 已修复此处原本多余的 -e 语法错误
 if [ "$current_batch" -gt 0 ]; then
     wait
     completed_jobs=$((completed_jobs + current_batch))
@@ -101,10 +102,10 @@ fi
 echo -e "\n\n$total_jobs 项训练任务已全部执行完毕！"
 
 echo "正在自动提取各 Case 的最高分..."
-SUMMARY_FILE="UDT_Summary_Scores.csv"   # 改为 UDT 汇总文件
+SUMMARY_FILE="RDT_Summary_Scores.csv"   # 4. 改为 RDT 汇总文件
 
-# 表头列名改为 UDT
-echo "Environment,Seed,Noise_Type,Attack_Type,UDT" > $SUMMARY_FILE
+# 5. 表头列名改为 RDT
+echo "Environment,Seed,Noise_Type,Attack_Type,RDT" > $SUMMARY_FILE
 
 for ENV in "${ENVS[@]}"; do
     for MODE in "${MODES[@]}"; do

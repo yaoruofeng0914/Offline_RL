@@ -373,11 +373,13 @@ class DecisionTransformer(nn.Module):
             use_stochastic: bool = False,
             init_temperature: float = 0.1,
             corruption_tag: str = "none",
+            use_udt: bool = True,
 
     ):
         super().__init__()
-        self.skip_gating = False
         self.corruption_tag = corruption_tag
+        self.use_udt = use_udt
+
         if embedding_dropout is not None:
             self.emb_drop = nn.Dropout(embedding_dropout)
         self.emb_norm = nn.LayerNorm(embedding_dim)
@@ -386,14 +388,24 @@ class DecisionTransformer(nn.Module):
         # additional seq_len embeddings for padding timesteps
         self.timestep_emb = nn.Embedding(episode_len + seq_len, embedding_dim)
 
-        if mlp_embedding:
-            self.state_emb = ResidualBlock(state_dim, embedding_dim)
-            self.action_emb = ResidualBlock(action_dim, embedding_dim)
-            self.return_emb = ResidualBlock(1, embedding_dim)
-        else:
+        if self.use_udt:
+            # 开启 UDT：使用你写的 BayesianEmbedding
             self.state_emb = BayesianEmbedding(state_dim, embedding_dim)
             self.action_emb = BayesianEmbedding(action_dim, embedding_dim)
             self.return_emb = BayesianEmbedding(1, embedding_dim)
+            self.log_lambda = nn.Parameter(torch.tensor(0.0))  # 初始化为 0，即 λ=1
+            self.log_lambda.requires_grad = False  # 暂不修改梯度设置
+            self.skip_gating = False
+        else:
+            # 关闭 UDT：退化为无损的 RDT (Linear 或 ResidualBlock)
+            self.state_emb = nn.Linear(state_dim, embedding_dim) if not mlp_embedding else ResidualBlock(state_dim,
+                                                                                                         embedding_dim)
+            self.action_emb = nn.Linear(action_dim, embedding_dim) if not mlp_embedding else ResidualBlock(action_dim,
+                                                                                                           embedding_dim)
+            self.return_emb = nn.Linear(1, embedding_dim) if not mlp_embedding else ResidualBlock(1, embedding_dim)
+            self.log_lambda = None
+            self.skip_gating = False
+
         effective_seq_len = 3 * seq_len
 
         self.blocks = nn.ModuleList(
@@ -423,10 +435,6 @@ class DecisionTransformer(nn.Module):
             num_layer = 2 if mlp_reward else 1
             self.reward_head = MLPBlock(embedding_dim, 1, num_layer)
 
-        self.log_lambda = nn.Parameter(torch.tensor(0.0))  # 初始化为 0，即 λ=1
-        self.log_lambda.requires_grad = False
-        self.apply(self._init_weights)
-
         self.seq_len = seq_len
         self.embedding_dim = embedding_dim
         self.state_dim = state_dim
@@ -434,6 +442,8 @@ class DecisionTransformer(nn.Module):
         self.episode_len = episode_len
         self.embed_order = embed_order
         self.predict_reward = predict_reward
+
+        self.apply(self._init_weights)
 
     @staticmethod
     def _init_weights(module: nn.Module):
@@ -479,26 +489,43 @@ class DecisionTransformer(nn.Module):
         batch_size, seq_len = states.shape[0], states.shape[1]
         time_emb = self.timestep_emb(time_steps)
 
-        state_mu, state_logvar = self.state_emb(states)
-        act_mu, act_logvar = self.action_emb(actions)
-        ret_mu, ret_logvar = self.return_emb(returns_to_go)
+        if self.use_udt:
+            # UDT 模式: 解析高斯分布参数
+            state_mu, state_logvar = self.state_emb(states)
+            act_mu, act_logvar = self.action_emb(actions)
+            ret_mu, ret_logvar = self.return_emb(returns_to_go)
 
-        state_var = state_logvar.exp().mean(dim=-1)
-        act_var = act_logvar.exp().mean(dim=-1)
-        ret_var = ret_logvar.exp().mean(dim=-1)
+            state_var = state_logvar.exp().mean(dim=-1)
+            act_var = act_logvar.exp().mean(dim=-1)
+            ret_var = ret_logvar.exp().mean(dim=-1)
 
-        if self.embed_order == "rsa":
-            var_seq = torch.stack([ret_var, state_var, act_var], dim=1)
-        elif self.embed_order == "sar":
-            var_seq = torch.stack([state_var, act_var, ret_var], dim=1)
+            if self.embed_order == "rsa":
+                var_seq = torch.stack([ret_var, state_var, act_var], dim=1)
+                sequence = torch.stack([ret_mu, state_mu, act_mu], dim=1)
+            elif self.embed_order == "sar":
+                var_seq = torch.stack([state_var, act_var, ret_var], dim=1)
+                sequence = torch.stack([state_mu, act_mu, ret_mu], dim=1)
+            else:
+                raise ValueError(f"Invalid embed_order {self.embed_order}")
+
+            var_seq = var_seq.permute(0, 2, 1).reshape(batch_size, 3 * seq_len)
+            udt_info = (state_mu, state_logvar, act_mu, act_logvar, ret_mu, ret_logvar)
         else:
-            raise ValueError(f"Invalid embed_order {self.embed_order}")
-        var_seq = var_seq.permute(0, 2, 1).reshape(batch_size, 3 * seq_len)
+            # RDT 模式: 常规 Linear 投影
+            state_emb = self.state_emb(states)
+            act_emb = self.action_emb(actions)
+            ret_emb = self.return_emb(returns_to_go)
 
-        if self.embed_order == "rsa":
-            sequence = torch.stack([ret_mu, state_mu, act_mu], dim=1)
-        elif self.embed_order == "sar":
-            sequence = torch.stack([state_mu, act_mu, ret_mu], dim=1)
+            if self.embed_order == "rsa":
+                sequence = torch.stack([ret_emb, state_emb, act_emb], dim=1)
+            elif self.embed_order == "sar":
+                sequence = torch.stack([state_emb, act_emb, ret_emb], dim=1)
+            else:
+                raise ValueError(f"Invalid embed_order {self.embed_order}")
+
+            var_seq = None
+            udt_info = None
+
         sequence = sequence.permute(0, 2, 1, 3).reshape(batch_size, 3 * seq_len, self.embedding_dim)
         sequence = sequence + time_emb.repeat_interleave(3, dim=1)
 
@@ -514,9 +541,10 @@ class DecisionTransformer(nn.Module):
             out = self.emb_drop(out)
 
         for block in self.blocks:
-            out = block(out, padding_mask=padding_mask,
-                        var_seq=var_seq if not self.skip_gating else None,
-                        log_lambda=self.log_lambda if not self.skip_gating else None)
+            pass_var = var_seq if (self.use_udt and not self.skip_gating) else None
+            pass_lambda = self.log_lambda if (self.use_udt and not self.skip_gating) else None
+            out = block(out, padding_mask=padding_mask, var_seq=pass_var, log_lambda=pass_lambda)
+            # ==================================
 
         out = self.out_norm(out)
 
@@ -535,12 +563,13 @@ class DecisionTransformer(nn.Module):
         else:
             reward_out = None
 
-        if hasattr(self, 'log_lambda') and var_seq is not None:
+        if getattr(self, 'log_lambda', None) is not None and var_seq is not None:
             self._debug_lambda = torch.exp(self.log_lambda).item()
             self._debug_var_mean = var_seq.mean().item()
             self._debug_var_max = var_seq.max().item()
             self._debug_var_min = var_seq.min().item()
-        return action_out, reward_out, (state_mu, state_logvar, act_mu, act_logvar, ret_mu, ret_logvar)
+
+        return action_out, reward_out, udt_info
 
 
 # ==========================================
