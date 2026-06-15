@@ -111,7 +111,13 @@ class TrainConfig:
     correct_start: int = 50                 # 从第几个 epoch 开始校正
     correct_thershold: Tuple[float] = None  # 异常值校正阈值 (act, rew)
     # ===========================================
-
+    # ========== 新增：UDT 熵权参数 ==========
+    loss_weight_type: str = "entropy"  # 可选: "wmse", "entropy"
+    entropy_k: float = 0.1            # sigmoid 陡峭度 (调小让过渡平滑)
+    entropy_theta: float = 182.0
+    lambda_ent : float = 3e-6 # 中心阈值 (略高于当前熵均值 181)
+    entropy_baseline: float = 184.0
+    # ===========================================
 
     def __post_init__(self):
         # train
@@ -314,6 +320,52 @@ def correct_outliers(config, data_info, data_dist, correct=False):  # New
             diff = diff[np.where(mask.cpu().numpy() == 1)]
             dist.update(diff)
     return correct_info, correct_dict
+def loss_fn(config, predicted, target, mask, coef=None, log_var=None):
+    """
+    统一的损失函数，支持 WMSE 和 Entropy-based 权重，并返回详细日志。
+    """
+    log_info = {}
+
+    if config.loss_weight_type == "wmse":
+        # 原始 WMSE 逻辑
+        with torch.no_grad():
+            diff = torch.square(predicted.detach() - target.detach()).mean(-1, keepdim=True)
+            weight = torch.exp(-coef * diff)
+
+        log_info["weight_mean"] = weight[mask.to(torch.bool)].mean().item()
+
+    elif config.loss_weight_type == "entropy":
+        # 基于微分熵的信任度加权
+        if log_var is None:
+            raise ValueError("Using 'entropy' weight requires log_var from BayesianEmbedding.")
+
+        # 阻断梯度
+        log_var_detached = log_var.detach()
+
+        # 计算微分熵 H = 0.5 * sum(logvar + 1 + ln(2π))  按嵌入维度求和
+        entropy = 0.5 * torch.sum(log_var_detached + 1.0 + np.log(2 * np.pi), dim=-1, keepdim=True)
+
+        # 信任度系数 τ = 1 / (1 + exp(k * (H - θ)))
+        weight = 1.0 / (1.0 + torch.exp(config.entropy_k * (entropy - config.entropy_theta)))
+
+        # 日志记录
+        valid_mask = mask.to(torch.bool).unsqueeze(-1)
+        valid_entropy = entropy[valid_mask]
+        valid_weight = weight[valid_mask]
+
+        log_info["entropy_mean"] = valid_entropy.mean().item()
+        log_info["entropy_std"]  = valid_entropy.std().item() if valid_entropy.numel() > 1 else 0.0
+        log_info["entropy_max"]  = valid_entropy.max().item() if valid_entropy.numel() > 0 else 0.0
+        log_info["entropy_min"]  = valid_entropy.min().item() if valid_entropy.numel() > 0 else 0.0
+        log_info["weight_mean"]  = valid_weight.mean().item()
+    else:
+        raise ValueError(f"Unknown loss_weight_type: {config.loss_weight_type}")
+
+    # 计算加权 MSE 损失
+    loss = F.mse_loss(predicted, target.detach(), reduction="none")
+    loss = (loss * weight * mask.unsqueeze(-1)).mean()
+
+    return loss, log_info
 
 def train(config: TrainConfig, logger: Logger):
     # Set seeds
@@ -431,35 +483,122 @@ def train(config: TrainConfig, logger: Logger):
             udt_info = predicted[2]
 
             # ========== RDT 风格的加权均方误差 (WMSE) ==========
-            def wmse_loss(pred, target, mask, coef):
-                """带掩码的加权均方误差"""
-                with torch.no_grad():
-                    diff = torch.square(pred.detach() - target.detach()).mean(-1, keepdim=True)
-                    weight = torch.exp(-coef * diff)
-                loss = F.mse_loss(pred, target.detach(), reduction="none")
-                loss = (loss * weight) * mask.unsqueeze(-1)
-                return loss.mean()
+            # ========== 解包 udt_info，准备 logvar ==========
+            if config.use_udt and udt_info is not None:
+                state_mu, state_logvar, act_mu, act_logvar, ret_mu, ret_logvar = udt_info
+                state_logvar_for_loss = state_logvar
+                act_logvar_for_loss = act_logvar
+                ret_logvar_for_loss = ret_logvar
+            else:
+                act_logvar_for_loss = None
+                ret_logvar_for_loss = None
 
-            # 动作和奖励损失
-            loss_action = wmse_loss(predicted_actions, actions, mask, config.wmse_coef[0])
-            loss_reward = wmse_loss(predicted_rewards, rewards, mask, config.wmse_coef[1])
-            loss_total = loss_action + config.reward_coef * loss_reward
+            # ========== 动作和奖励损失（根据 loss_weight_type 自动选择 wmse 或 entropy） ==========
+            loss_action, action_log_info = loss_fn(
+                config, predicted_actions, actions, mask,
+                coef=config.wmse_coef[0], log_var=state_logvar_for_loss
+            )
+            loss_reward, reward_log_info = loss_fn(
+                config, predicted_rewards, rewards, mask,
+                coef=config.wmse_coef[1], log_var=act_logvar_for_loss
+            )
 
+            # ========== KL 散度约束与退火 + 方案 B 熵提升 ==========
+            kl_total = torch.tensor(0.0, device=config.device)
+            current_beta = 0.0
+            ent_boost_loss = torch.tensor(0.0, device=config.device)
+
+            if config.use_udt and udt_info is not None:
+                state_mu, state_logvar, act_mu, act_logvar, ret_mu, ret_logvar = udt_info
+
+                # --- KL 散度 ---
+                kl_state = -0.5 * torch.sum(1 + state_logvar - state_mu.pow(2) - state_logvar.exp(), dim=-1).mean()
+                kl_act = -0.5 * torch.sum(1 + act_logvar - act_mu.pow(2) - act_logvar.exp(), dim=-1).mean()
+                kl_ret = -0.5 * torch.sum(1 + ret_logvar - ret_mu.pow(2) - ret_logvar.exp(), dim=-1).mean()
+                kl_total = kl_state + kl_act + kl_ret
+
+                kl_warmup = getattr(config, 'kl_warmup_steps', 20000)
+                beta_target = getattr(config, 'beta', 0.00001)
+                if kl_warmup > 0:
+                    current_beta = beta_target * min(1.0, total_updates / kl_warmup)
+                else:
+                    current_beta = beta_target
+
+                if config.lambda_ent > 0 and attack_mask is not None:
+                    attack_mask_bool = (attack_mask.squeeze(-1) > 0).to(torch.bool)
+                    valid_mask = mask.to(torch.bool)
+                    attack_token_mask = valid_mask & attack_mask_bool
+
+                    if attack_token_mask.sum() > 0:
+                        state_entropy = 0.5 * torch.sum(
+                            state_logvar + 1.0 + np.log(2 * np.pi), dim=-1
+                        )
+                        act_entropy = 0.5 * torch.sum(
+                            act_logvar + 1.0 + np.log(2 * np.pi), dim=-1
+                        )
+
+                        baseline = config.entropy_baseline
+                        ent_boost = (
+                                            (state_entropy[attack_token_mask] - baseline).clamp(min=0).mean() +
+                                            (act_entropy[attack_token_mask] - baseline).clamp(min=0).mean()
+                                    ) * 0.5
+                        ent_boost_loss = - config.lambda_ent * ent_boost
+
+            # 合并总损失（KL 和方案 B 已经在上面计算完毕）
+            loss_total = loss_action + config.reward_coef * loss_reward + current_beta * kl_total + ent_boost_loss
             optim.zero_grad()
             loss_total.backward()
 
-            # 梯度裁剪
             if config.clip_grad is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_grad)
             optim.step()
 
-            # 记录日志
+            # ========== 熵监控（观察 KL 加入后的变化） ==========
+            if config.use_udt and udt_info is not None:
+                # 重新解包 udt_info，得到 logvar（忽略 mu）
+                _, state_logvar, _, act_logvar, _, ret_logvar = udt_info
+
+                def calc_entropy(logvar, mask, attack_mask, name, log_dict):
+                    with torch.no_grad():
+                        entropy = 0.5 * torch.sum(logvar + 1.0 + np.log(2 * np.pi), dim=-1)  # (batch, seq_len)
+                        valid_mask = mask.to(torch.bool)
+                        attack_mask_bool = (attack_mask.squeeze(-1) > 0).to(torch.bool)
+
+                        all_ent = entropy[valid_mask]
+                        attack_ent = entropy[valid_mask & attack_mask_bool]
+
+                        log_dict[f"entropy/{name}_mean"] = all_ent.mean().item()
+                        log_dict[f"entropy/{name}_std"] = all_ent.std().item() if all_ent.numel() > 1 else 0.0
+                        log_dict[f"entropy/{name}_max"] = all_ent.max().item() if all_ent.numel() > 0 else 0.0
+                        log_dict[f"entropy/{name}_min"] = all_ent.min().item() if all_ent.numel() > 0 else 0.0
+
+                        if attack_ent.numel() > 0:
+                            log_dict[f"entropy/attack_{name}_mean"] = attack_ent.mean().item()
+                            log_dict[
+                                f"entropy/attack_{name}_std"] = attack_ent.std().item() if attack_ent.numel() > 1 else 0.0
+                        else:
+                            log_dict[f"entropy/attack_{name}_mean"] = 0.0
+                            log_dict[f"entropy/attack_{name}_std"] = 0.0
+
+                calc_entropy(state_logvar, mask, attack_mask, "state", log_dict)
+                calc_entropy(act_logvar, mask, attack_mask, "act", log_dict)
+                calc_entropy(ret_logvar, mask, attack_mask, "ret", log_dict)
+            # =====================================================
+
+            # 记录日志（只需一次）
             log_dict.update({
                 "loss_action": loss_action.item(),
                 "loss_reward": loss_reward.item(),
+                "kl_loss": kl_total.item(),
+                "current_beta": current_beta,
+                "ent_boost_loss": ent_boost_loss.item(),
                 "policy_loss": loss_total.item(),
                 "learning_rate": scheduler.get_last_lr()[0],
             })
+            for k, v in action_log_info.items():
+                log_dict[f"act_{k}"] = v
+            for k, v in reward_log_info.items():
+                log_dict[f"rew_{k}"] = v
             scheduler.step()
             total_updates += 1
 

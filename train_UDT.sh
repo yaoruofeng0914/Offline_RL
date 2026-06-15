@@ -1,8 +1,8 @@
 #!/bin/bash
 ENVS=(
 #"door-expert-v0"
-#"halfcheetah-medium-replay-v2"
-"hammer-expert-v0"
+"halfcheetah-medium-replay-v2"
+#"hammer-expert-v0"
 #"hopper-medium-replay-v2"
 #"kitchen-complete-v0"
 #"kitchen-mixed-v0"
@@ -11,8 +11,8 @@ ENVS=(
 #"walker2d-medium-replay-v2"
 )
 MODES=(
-#"random"
-"adversarial"
+"random"
+#"adversarial"
 )
 
 TAGS=(
@@ -75,7 +75,7 @@ for ENV in "${ENVS[@]}"; do
                     --test_attack_mode "nsaop" \
                     --use_wandb 0 \
                     --save_model True \
-                    --use_udt False \
+                    --use_udt True \
                     > "$LOG_FILE" 2>&1 &
 
                 let current_batch++
