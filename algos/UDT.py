@@ -14,6 +14,7 @@ import gym
 import numpy as np
 import pyrallis
 import torch
+import math
 import wandb
 import utils.functions as func
 import utils.dt_functions_UDT as dt_func
@@ -100,6 +101,11 @@ class TrainConfig:
     test_attack_mode: str = ""   # 留空表示跟随 corruption_mode，设为 "nsaop" 启用新基准
 
     beta: float = 0.00001   # KL散度正则化系数
+
+    # ========== DAVR 双重自适应正则化参数 ==========
+    dapa_threshold: float = 50.0        # 数据量阈值 N0
+    rew_error_tau: float = 1.0          # 奖励误差温度 τ
+    rew_error_ema_decay: float = 0.9    # 误差平滑系数
     use_udt: bool = True
 
     # ========== 新增：RDT 训练策略参数 ==========
@@ -112,11 +118,11 @@ class TrainConfig:
     correct_thershold: Tuple[float] = None  # 异常值校正阈值 (act, rew)
     # ===========================================
     # ========== 新增：UDT 熵权参数 ==========
-    loss_weight_type: str = "entropy"  # 可选: "wmse", "entropy"
-    entropy_k: float = 0.1            # sigmoid 陡峭度 (调小让过渡平滑)
+    alpha_min: float = 0.2   # 低于此值强制进入无先验模式
     entropy_theta: float = 182.0
     lambda_ent : float = 3e-6 # 中心阈值 (略高于当前熵均值 181)
     entropy_baseline: float = 184.0
+    dapa_power: float = 2.0  # 幂次，越大则小数据下衰减越强
     # ===========================================
 
     def __post_init__(self):
@@ -232,6 +238,7 @@ class TrainConfig:
             self.update_steps = int(self.num_epochs * self.num_updates_on_epoch)
             self.warmup_steps = int(0.1 * self.update_steps)
             self.decay_steps = int(0.1 * self.update_steps)
+            # 根据攻击类型动态启用方案B：仅动作攻击时开启，其余攻击关闭
         # evaluation
         # if self.eval_only:
             # assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
@@ -320,48 +327,17 @@ def correct_outliers(config, data_info, data_dist, correct=False):  # New
             diff = diff[np.where(mask.cpu().numpy() == 1)]
             dist.update(diff)
     return correct_info, correct_dict
-def loss_fn(config, predicted, target, mask, coef=None, log_var=None):
+def loss_fn(config, predicted, target, mask, coef=None):
     """
-    统一的损失函数，支持 WMSE 和 Entropy-based 权重，并返回详细日志。
+    纯 WMSE 损失函数（熵信任度已移除）。
     """
     log_info = {}
+    with torch.no_grad():
+        diff = torch.square(predicted.detach() - target.detach()).mean(-1, keepdim=True)
+        weight = torch.exp(-coef * diff)
 
-    if config.loss_weight_type == "wmse":
-        # 原始 WMSE 逻辑
-        with torch.no_grad():
-            diff = torch.square(predicted.detach() - target.detach()).mean(-1, keepdim=True)
-            weight = torch.exp(-coef * diff)
+    log_info["weight_mean"] = weight[mask.to(torch.bool)].mean().item()
 
-        log_info["weight_mean"] = weight[mask.to(torch.bool)].mean().item()
-
-    elif config.loss_weight_type == "entropy":
-        # 基于微分熵的信任度加权
-        if log_var is None:
-            raise ValueError("Using 'entropy' weight requires log_var from BayesianEmbedding.")
-
-        # 阻断梯度
-        log_var_detached = log_var.detach()
-
-        # 计算微分熵 H = 0.5 * sum(logvar + 1 + ln(2π))  按嵌入维度求和
-        entropy = 0.5 * torch.sum(log_var_detached + 1.0 + np.log(2 * np.pi), dim=-1, keepdim=True)
-
-        # 信任度系数 τ = 1 / (1 + exp(k * (H - θ)))
-        weight = 1.0 / (1.0 + torch.exp(config.entropy_k * (entropy - config.entropy_theta)))
-
-        # 日志记录
-        valid_mask = mask.to(torch.bool).unsqueeze(-1)
-        valid_entropy = entropy[valid_mask]
-        valid_weight = weight[valid_mask]
-
-        log_info["entropy_mean"] = valid_entropy.mean().item()
-        log_info["entropy_std"]  = valid_entropy.std().item() if valid_entropy.numel() > 1 else 0.0
-        log_info["entropy_max"]  = valid_entropy.max().item() if valid_entropy.numel() > 0 else 0.0
-        log_info["entropy_min"]  = valid_entropy.min().item() if valid_entropy.numel() > 0 else 0.0
-        log_info["weight_mean"]  = valid_weight.mean().item()
-    else:
-        raise ValueError(f"Unknown loss_weight_type: {config.loss_weight_type}")
-
-    # 计算加权 MSE 损失
     loss = F.mse_loss(predicted, target.detach(), reduction="none")
     loss = (loss * weight * mask.unsqueeze(-1)).mean()
 
@@ -390,6 +366,17 @@ def train(config: TrainConfig, logger: Logger):
     config.act_std = dataset.act_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
+    # 计算数据量感知因子 alpha
+    num_trajectories = len(dataset.dataset)
+    # 使用幂次缩放，更加积极地在小数据下衰减先验
+    dapa_power = getattr(config, 'dapa_power', 2.0)  # 默认平方
+    config.alpha = min(1.0, (num_trajectories / config.dapa_threshold) ** dapa_power)
+    # 数据量感知的无先验模式：当 alpha 极小时，完全关闭 KL 和方案 B
+    if config.alpha < getattr(config, 'alpha_min', 0.2):
+        config.beta = 0.0
+        config.lambda_ent = 0.0
+        logger.info(f"Alpha={config.alpha:.4f} < threshold, entering zero-prior mode.")
+    logger.info(f"Num trajectories: {num_trajectories}, alpha: {config.alpha:.4f}")
 
     env = func.wrap_env(
         env,
@@ -464,6 +451,8 @@ def train(config: TrainConfig, logger: Logger):
         # log_lambda 默认 requires_grad=True，无需手动设置
         for step in trange(config.num_updates_on_epoch, desc="Epoch", leave=False):
             log_dict = {}
+            if not hasattr(config, 'ema_rew_error'):
+                config.ema_rew_error = 1.0
             # batch = next(trainloader_iter)
             batch = dataset.get_batch(config.batch_size, config.recalculate_return)
             states, actions, returns, rewards, time_steps, mask, attack_mask, traj_indexs = [b.to(config.device) for b
@@ -494,14 +483,26 @@ def train(config: TrainConfig, logger: Logger):
                 ret_logvar_for_loss = None
 
             # ========== 动作和奖励损失（根据 loss_weight_type 自动选择 wmse 或 entropy） ==========
+            # 计算 gamma_rew（基于上一轮 EMA）
+            gamma_rew = math.exp(-config.ema_rew_error / config.rew_error_tau)
+            gamma_rew = max(gamma_rew, 0.1)
+
+            # 动作和奖励损失（纯 WMSE）
             loss_action, action_log_info = loss_fn(
                 config, predicted_actions, actions, mask,
-                coef=config.wmse_coef[0], log_var=state_logvar_for_loss
+                coef=config.wmse_coef[0]
             )
             loss_reward, reward_log_info = loss_fn(
                 config, predicted_rewards, rewards, mask,
-                coef=config.wmse_coef[1], log_var=act_logvar_for_loss
+                coef=config.wmse_coef[1]
             )
+
+            # 更新奖励误差 EMA
+            with torch.no_grad():
+                raw_rew_error = F.mse_loss(predicted_rewards, rewards, reduction='mean').item()
+                norm_rew_error = raw_rew_error / (config.rew_std ** 2 + 1e-6)
+                config.ema_rew_error = (config.rew_error_ema_decay * config.ema_rew_error
+                                        + (1 - config.rew_error_ema_decay) * norm_rew_error)
 
             # ========== KL 散度约束与退火 + 方案 B 熵提升 ==========
             kl_total = torch.tensor(0.0, device=config.device)
@@ -510,19 +511,21 @@ def train(config: TrainConfig, logger: Logger):
 
             if config.use_udt and udt_info is not None:
                 state_mu, state_logvar, act_mu, act_logvar, ret_mu, ret_logvar = udt_info
-
-                # --- KL 散度 ---
-                kl_state = -0.5 * torch.sum(1 + state_logvar - state_mu.pow(2) - state_logvar.exp(), dim=-1).mean()
-                kl_act = -0.5 * torch.sum(1 + act_logvar - act_mu.pow(2) - act_logvar.exp(), dim=-1).mean()
-                kl_ret = -0.5 * torch.sum(1 + ret_logvar - ret_mu.pow(2) - ret_logvar.exp(), dim=-1).mean()
-                kl_total = kl_state + kl_act + kl_ret
-
                 kl_warmup = getattr(config, 'kl_warmup_steps', 20000)
                 beta_target = getattr(config, 'beta', 0.00001)
                 if kl_warmup > 0:
                     current_beta = beta_target * min(1.0, total_updates / kl_warmup)
                 else:
                     current_beta = beta_target
+                # --- KL 散度 ---
+                # --- KL 散度（双重自适应：alpha 全局缩放 + gamma_rew 抑制回报KL）---
+                kl_state = -0.5 * torch.sum(1 + state_logvar - state_mu.pow(2) - state_logvar.exp(), dim=-1).mean()
+                kl_act = -0.5 * torch.sum(1 + act_logvar - act_mu.pow(2) - act_logvar.exp(), dim=-1).mean()
+                kl_ret = -0.5 * torch.sum(1 + ret_logvar - ret_mu.pow(2) - ret_logvar.exp(), dim=-1).mean()
+
+                alpha = config.alpha
+                kl_total = alpha * current_beta * (kl_state + kl_act) + alpha * current_beta * gamma_rew * kl_ret
+
 
                 if config.lambda_ent > 0 and attack_mask is not None:
                     attack_mask_bool = (attack_mask.squeeze(-1) > 0).to(torch.bool)
@@ -542,10 +545,10 @@ def train(config: TrainConfig, logger: Logger):
                                             (state_entropy[attack_token_mask] - baseline).clamp(min=0).mean() +
                                             (act_entropy[attack_token_mask] - baseline).clamp(min=0).mean()
                                     ) * 0.5
-                        ent_boost_loss = - config.lambda_ent * ent_boost
+                        ent_boost_loss = - config.lambda_ent * config.alpha * ent_boost
 
             # 合并总损失（KL 和方案 B 已经在上面计算完毕）
-            loss_total = loss_action + config.reward_coef * loss_reward + current_beta * kl_total + ent_boost_loss
+            loss_total = loss_action + config.reward_coef * loss_reward + kl_total + ent_boost_loss
             optim.zero_grad()
             loss_total.backward()
 
@@ -591,6 +594,9 @@ def train(config: TrainConfig, logger: Logger):
                 "loss_reward": loss_reward.item(),
                 "kl_loss": kl_total.item(),
                 "current_beta": current_beta,
+                "alpha": config.alpha,
+                "gamma_rew": gamma_rew,
+                "ema_rew_error": config.ema_rew_error,
                 "ent_boost_loss": ent_boost_loss.item(),
                 "policy_loss": loss_total.item(),
                 "learning_rate": scheduler.get_last_lr()[0],
