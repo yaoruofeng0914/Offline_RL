@@ -203,7 +203,8 @@ def eval_rollout(
         eval_attack_tag: str = "obs",
         device: str = "cpu",
         use_stochastic: bool = False,
-        config=None
+        config=None,
+        alpha: Optional[float] = None,
 ) -> Tuple[float, float]:
     action_range = [
         float(env.action_space.low.min()) + 1e-6,
@@ -276,6 +277,7 @@ def eval_rollout(
             actions[:, : step + 1][:, -model.seq_len:],
             returns[:, : step + 1][:, -model.seq_len:],
             time_steps[:, : step + 1][:, -model.seq_len:],
+            alpha = alpha,
         )
         predicted_actions = predicted[0]
         if use_stochastic:
@@ -337,6 +339,7 @@ def eval_fn(config, env, model, eval_attacker=None):
                 device=config.device,
                 use_stochastic=use_stochastic,
                 config=config,
+                alpha=config.alpha,
             )
             eval_returns.append(eval_return / config.reward_scale)
 
@@ -485,6 +488,7 @@ class DecisionTransformer(nn.Module):
             returns_to_go: torch.Tensor,
             time_steps: torch.Tensor,
             padding_mask: Optional[torch.Tensor] = None,
+            alpha: Optional[float] = None,
     ):
         batch_size, seq_len = states.shape[0], states.shape[1]
         time_emb = self.timestep_emb(time_steps)

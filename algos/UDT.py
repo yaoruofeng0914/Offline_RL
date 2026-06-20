@@ -101,7 +101,6 @@ class TrainConfig:
     test_attack_mode: str = ""   # 留空表示跟随 corruption_mode，设为 "nsaop" 启用新基准
 
     beta: float = 0.00001   # KL散度正则化系数
-
     # ========== DAVR 双重自适应正则化参数 ==========
     dapa_threshold: float = 50.0        # 数据量阈值 N0
     rew_error_tau: float = 1.0          # 奖励误差温度 τ
@@ -117,12 +116,10 @@ class TrainConfig:
     correct_start: int = 50                 # 从第几个 epoch 开始校正
     correct_thershold: Tuple[float] = None  # 异常值校正阈值 (act, rew)
     # ===========================================
-    # ========== 新增：UDT 熵权参数 ==========
-    alpha_min: float = 0.2   # 低于此值强制进入无先验模式
+    # ========== 新增：UDT 熵权参数 =======
     entropy_theta: float = 182.0
-    lambda_ent : float = 3e-6 # 中心阈值 (略高于当前熵均值 181)
     entropy_baseline: float = 184.0
-    dapa_power: float = 2.0  # 幂次，越大则小数据下衰减越强
+    lambda_ent : float = 3e-6 # 中心阈值 (略高于当前熵均值 181)
     # ===========================================
 
     def __post_init__(self):
@@ -265,7 +262,6 @@ class TrainConfig:
         # else:
         #     self.eval_attack_mode = self.corruption_mode
 
-
 def set_model(config: TrainConfig):
     model = dt_func.DecisionTransformer(
         state_dim=config.state_dim,
@@ -367,17 +363,21 @@ def train(config: TrainConfig, logger: Logger):
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
     # 计算数据量感知因子 alpha
+    # 计算数据量感知因子 alpha
     num_trajectories = len(dataset.dataset)
-    # 使用幂次缩放，更加积极地在小数据下衰减先验
-    dapa_power = getattr(config, 'dapa_power', 2.0)  # 默认平方
-    config.alpha = min(1.0, (num_trajectories / config.dapa_threshold) ** dapa_power)
-    # 数据量感知的无先验模式：当 alpha 极小时，完全关闭 KL 和方案 B
-    if config.alpha < getattr(config, 'alpha_min', 0.2):
-        config.beta = 0.0
-        config.lambda_ent = 0.0
-        logger.info(f"Alpha={config.alpha:.4f} < threshold, entering zero-prior mode.")
-    logger.info(f"Num trajectories: {num_trajectories}, alpha: {config.alpha:.4f}")
 
+    # 获取平滑过渡的超参数 (可以在 TrainConfig 中预设)
+    # dapa_threshold (N_0): 过渡的中心点，推荐设在 30 左右 (介于 Kitchen 的 19 和其他环境的 100 之间)
+    # dapa_steepness (k): 控制退化曲线的陡峭程度，推荐设为 0.5
+    dapa_threshold = getattr(config, 'dapa_threshold', 30.0)
+    dapa_steepness = getattr(config, 'dapa_steepness', 0.5)
+
+    # 核心修改：使用 Sigmoid 函数实现完全连续的先验退化映射
+    # 当 N = 19 时，alpha 约为 0.004 (等效于关闭先验)
+    # 当 N = 100 时，alpha 约为 1.0 (全量先验)
+    config.alpha = 1.0 / (1.0 + math.exp(-dapa_steepness * (num_trajectories - dapa_threshold)))
+
+    logger.info(f"Num trajectories: {num_trajectories}, Continuous Alpha: {config.alpha:.6f}")
     env = func.wrap_env(
         env,
         state_mean=dataset.state_mean,
@@ -465,6 +465,7 @@ def train(config: TrainConfig, logger: Logger):
                 returns_to_go=returns,
                 time_steps=time_steps,
                 padding_mask=padding_mask,
+                alpha = config.alpha,
             )
             predicted_actions = predicted[0]
             predicted_rewards = predicted[1]  # 奖励预测，WMSE 和异常值校正需要
@@ -519,13 +520,12 @@ def train(config: TrainConfig, logger: Logger):
                     current_beta = beta_target
                 # --- KL 散度 ---
                 # --- KL 散度（双重自适应：alpha 全局缩放 + gamma_rew 抑制回报KL）---
+                # 标准高斯 KL：先验 N(0, 1)
                 kl_state = -0.5 * torch.sum(1 + state_logvar - state_mu.pow(2) - state_logvar.exp(), dim=-1).mean()
                 kl_act = -0.5 * torch.sum(1 + act_logvar - act_mu.pow(2) - act_logvar.exp(), dim=-1).mean()
                 kl_ret = -0.5 * torch.sum(1 + ret_logvar - ret_mu.pow(2) - ret_logvar.exp(), dim=-1).mean()
-
                 alpha = config.alpha
                 kl_total = alpha * current_beta * (kl_state + kl_act) + alpha * current_beta * gamma_rew * kl_ret
-
 
                 if config.lambda_ent > 0 and attack_mask is not None:
                     attack_mask_bool = (attack_mask.squeeze(-1) > 0).to(torch.bool)
@@ -540,13 +540,13 @@ def train(config: TrainConfig, logger: Logger):
                             act_logvar + 1.0 + np.log(2 * np.pi), dim=-1
                         )
 
-                        baseline = config.entropy_baseline
                         ent_boost = (
-                                            (state_entropy[attack_token_mask] - baseline).clamp(min=0).mean() +
-                                            (act_entropy[attack_token_mask] - baseline).clamp(min=0).mean()
+                                            (state_entropy[attack_token_mask] - config.entropy_baseline).clamp(
+                                                min=0).mean() +
+                                            (act_entropy[attack_token_mask] - config.entropy_baseline).clamp(
+                                                min=0).mean()
                                     ) * 0.5
                         ent_boost_loss = - config.lambda_ent * config.alpha * ent_boost
-
             # 合并总损失（KL 和方案 B 已经在上面计算完毕）
             loss_total = loss_action + config.reward_coef * loss_reward + kl_total + ent_boost_loss
             optim.zero_grad()
@@ -709,7 +709,11 @@ def test(config: TrainConfig, logger: Logger):
     config.act_std = dataset.act_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
-
+    num_trajectories = len(dataset.dataset)
+    dapa_threshold = getattr(config, 'dapa_threshold', 30.0)
+    dapa_steepness = getattr(config, 'dapa_steepness', 0.5)
+    config.alpha = 1.0 / (1.0 + math.exp(-dapa_steepness * (num_trajectories - dapa_threshold)))
+    logger.info(f"Test Alpha: {config.alpha:.6f}")
     env = func.wrap_env(
         env,
         state_mean=dataset.state_mean,
