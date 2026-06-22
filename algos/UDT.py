@@ -499,8 +499,16 @@ def train(config: TrainConfig, logger: Logger):
             )
 
             # 更新奖励误差 EMA
+            # 更新奖励误差 EMA（仅对有效 token，避免 padding 稀释）
             with torch.no_grad():
-                raw_rew_error = F.mse_loss(predicted_rewards, rewards, reduction='mean').item()
+                # token-wise MSE，形状 (batch, seq_len)
+                rew_error_per_token = F.mse_loss(predicted_rewards, rewards, reduction='none').mean(dim=-1)
+                valid_mask = mask.to(torch.bool)
+                if valid_mask.sum() > 0:
+                    raw_rew_error = rew_error_per_token[valid_mask].mean().item()
+                else:
+                    raw_rew_error = 0.0
+                # 归一化（与数据集固有方差比较）
                 norm_rew_error = raw_rew_error / (config.rew_std ** 2 + 1e-6)
                 config.ema_rew_error = (config.rew_error_ema_decay * config.ema_rew_error
                                         + (1 - config.rew_error_ema_decay) * norm_rew_error)

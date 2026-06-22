@@ -17,8 +17,8 @@ MODES=(
 
 TAGS=(
 #"obs"
-"act"
-#"rew"
+#"act"
+"rew"
 )
 
 SEEDS=(
