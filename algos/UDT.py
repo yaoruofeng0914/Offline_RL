@@ -526,14 +526,55 @@ def train(config: TrainConfig, logger: Logger):
                     current_beta = beta_target * min(1.0, total_updates / kl_warmup)
                 else:
                     current_beta = beta_target
-                # --- KL 散度 ---
-                # --- KL 散度（双重自适应：alpha 全局缩放 + gamma_rew 抑制回报KL）---
-                # 标准高斯 KL：先验 N(0, 1)
-                kl_state = -0.5 * torch.sum(1 + state_logvar - state_mu.pow(2) - state_logvar.exp(), dim=-1).mean()
-                kl_act = -0.5 * torch.sum(1 + act_logvar - act_mu.pow(2) - act_logvar.exp(), dim=-1).mean()
-                kl_ret = -0.5 * torch.sum(1 + ret_logvar - ret_mu.pow(2) - ret_logvar.exp(), dim=-1).mean()
+
+                # ========== 数值安全锁：防止 logvar 溢出 ==========
+                MAX_LOGVAR = 5.0
+                MIN_LOGVAR = -10.0
+                state_logvar = torch.clamp(state_logvar, MIN_LOGVAR, MAX_LOGVAR)
+                act_logvar = torch.clamp(act_logvar, MIN_LOGVAR, MAX_LOGVAR)
+                ret_logvar = torch.clamp(ret_logvar, MIN_LOGVAR, MAX_LOGVAR)
+
+                # =========================================================
+                # 终极形态：模态独立掩码解耦 (Modality-Specific Masked Decoupling)
+                # 理念：谁被攻击谁解耦，干净模态继续受 N(0,1) 严格保护
+                # =========================================================
+                # 1. 计算未缩减的 KL [Batch, Seq_len]
+                kl_state_raw = -0.5 * torch.sum(1 + state_logvar - state_mu.pow(2) - state_logvar.exp(), dim=-1)
+                kl_act_raw = -0.5 * torch.sum(1 + act_logvar - act_mu.pow(2) - act_logvar.exp(), dim=-1)
+                kl_ret_raw = -0.5 * torch.sum(1 + ret_logvar - ret_mu.pow(2) - ret_logvar.exp(), dim=-1)
+
+                # 2. 模态独立掩码解耦 (Modality-Specific Masking)
+                valid_mask = mask.to(torch.bool)
+                if attack_mask is not None:
+                    attack_mask_bool = (attack_mask.squeeze(-1) > 0).to(torch.bool)
+                else:
+                    attack_mask_bool = torch.zeros_like(valid_mask)
+
+                # 核心修正：仅针对被攻击的模态解耦。没被攻击的干净模态，始终用 valid_mask 维持 N(0,1) 锚点保护！
+                mask_state = valid_mask & (~attack_mask_bool) if config.corruption_tag == "obs" else valid_mask
+                mask_act = valid_mask & (~attack_mask_bool) if config.corruption_tag == "act" else valid_mask
+                mask_ret = valid_mask & (~attack_mask_bool) if config.corruption_tag == "rew" else valid_mask
+
+                # 3. 独立计算各模态的 KL
+                if mask_state.sum() > 0:
+                    kl_state = kl_state_raw[mask_state].mean()
+                else:
+                    kl_state = torch.tensor(0.0, device=config.device)
+
+                if mask_act.sum() > 0:
+                    kl_act = kl_act_raw[mask_act].mean()
+                else:
+                    kl_act = torch.tensor(0.0, device=config.device)
+
+                if mask_ret.sum() > 0:
+                    kl_ret = kl_ret_raw[mask_ret].mean()
+                else:
+                    kl_ret = torch.tensor(0.0, device=config.device)
+
                 alpha = config.alpha
                 kl_total = alpha * current_beta * (kl_state + kl_act) + alpha * current_beta * gamma_rew * kl_ret
+
+                # 方案 B 部分保持不变 ...
 
                 if config.lambda_ent > 0 and attack_mask is not None:
                     attack_mask_bool = (attack_mask.squeeze(-1) > 0).to(torch.bool)
