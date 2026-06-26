@@ -28,7 +28,7 @@ from utils.replay_buffer import ReplayBuffer
 from utils.networks import MLP
 from utils.attack import Evaluation_Attacker
 from datetime import datetime
-
+from utils.dt_functions import NSAOPObsAttacker, NSAOPActAttacker, NSAOPRewAttacker
 MODEL_PATH = {
     "IQL": os.path.join(os.path.dirname(os.path.dirname(__file__)), "IQL_model"),
 }
@@ -89,6 +89,10 @@ class TrainConfig:
     use_original: int = 0  # 0 or 1
     same_index: int = 0
     froce_attack: int = 0
+    # NSAOP 测试模式
+    test_attack_mode: str = ""          # 设为 "nsaop" 启用
+    nsaop_eps_coeff: float = 1.0
+    reward_scale: float = 1.0    # 用于计算奖励攻击缩放
 
     def __post_init__(self):
         # train
@@ -159,6 +163,11 @@ class TrainConfig:
         self.eval_corruption_rate = 0.3
         if self.eval_attack_mode == "random" and self.corruption_tag == "rew":
             self.eval_attack_eps *= 30
+        if self.env.startswith("antmaze") or self.env.startswith("kitchen") or \
+                self.env.split("-")[0] in ["door", "pen", "hammer", "relocate"]:
+            self.reward_scale = 1.0
+        elif self.env.startswith("hopper") or self.env.startswith("halfcheetah") or self.env.startswith("walker"):
+            self.reward_scale = 0.001
 
 
 class GaussianPolicy(nn.Module):
@@ -283,7 +292,71 @@ class BCLearning:
         self.actor_optimizer.load_state_dict(state_dict["actor_optimizer"])
         self.total_it = state_dict["total_it"]
 
+def eval_actor_nsaop(config, env, actor):
+    device = config.device
+    n_episodes = config.eval_episodes
+    action_range = [
+        float(env.action_space.low.min()) + 1e-6,
+        float(env.action_space.high.max()) - 1e-6,
+    ]
 
+        # 初始化 NSAOP 攻击器
+    nsaop_obs = nsaop_act = nsaop_rew = None
+    if config.corruption_tag == "obs":
+        nsaop_obs = NSAOPObsAttacker(
+            state_dim=env.observation_space.shape[0],
+            state_std=config.state_std,
+            eps_coeff=config.nsaop_eps_coeff,
+            device=device,
+        )
+    elif config.corruption_tag == "act":
+        nsaop_act = NSAOPActAttacker(
+            action_dim=env.action_space.shape[0],
+            action_std=config.act_std,
+            action_low=env.action_space.low,
+            action_high=env.action_space.high,
+            eps_coeff=config.nsaop_eps_coeff,
+            device=device,
+        )
+    elif config.corruption_tag == "rew":
+        nsaop_rew = NSAOPRewAttacker(
+            rew_std=config.rew_std,
+            reward_scale=config.reward_scale,
+            eps_coeff=config.nsaop_eps_coeff,
+            device=device,
+        )
+
+    actor.eval()
+    episode_rewards = []
+    for _ in trange(n_episodes):
+        state, done = env.reset(), False
+        if nsaop_obs:
+            state = nsaop_obs.attack_obs(state)
+        episode_reward = 0.0
+        while not done:
+            action = actor.act(state, device)
+            if nsaop_act:
+                action = nsaop_act.attack_act(action)
+            action = np.clip(action, *action_range)
+            next_state, reward, done, _ = env.step(action)
+            if nsaop_obs:
+                next_state = nsaop_obs.attack_obs(next_state)
+            if nsaop_rew:
+                reward = nsaop_rew.attack_rew(reward)
+            episode_reward += reward
+            state = next_state
+        episode_rewards.append(episode_reward)
+
+    actor.train()
+    eval_returns = np.array(episode_rewards)
+    normalized_score = env.get_normalized_score(eval_returns) * 100.0
+    eval_log = {
+        "eval/reward_mean": np.mean(eval_returns),
+        "eval/reward_std": np.std(eval_returns),
+        "eval/normalized_score_mean": np.mean(normalized_score),
+        "eval/normalized_score_std": np.std(normalized_score),
+    }
+    return eval_log
 def train(config: TrainConfig, logger: Logger):
     # Set seeds
     func.set_seed(config.seed)
@@ -310,7 +383,9 @@ def train(config: TrainConfig, logger: Logger):
 
     dataset = d4rl.qlearning_dataset(env, dataset, terminate_on_end=True)
     dataset, state_mean, state_std = func.normalize_dataset(config, dataset)
-
+    config.state_std = state_std
+    config.act_std = np.std(dataset["actions"], axis=0) + 1e-6
+    config.rew_std = np.std(dataset["rewards"]) + 1e-6
     env = func.wrap_env(env, state_mean=state_mean, state_std=state_std)
     env.seed(config.seed)
 
@@ -397,7 +472,10 @@ def train(config: TrainConfig, logger: Logger):
 
         # Evaluate episode
         if epoch % config.eval_every == 0 and epoch > (config.num_epochs - config.eval_final):
-            eval_log = func.eval(config, env, actor)
+            if config.test_attack_mode == "nsaop":
+                eval_log = eval_actor_nsaop(config, env, actor)
+            else:
+                eval_log = func.eval(config, env, actor)
             logger.record("epoch", epoch)
             logger.record("epoch_time", epoch_time)
             for k, v in eval_log.items():
@@ -475,7 +553,9 @@ def test(config: TrainConfig, logger: Logger):
 
     dataset = d4rl.qlearning_dataset(env, dataset, terminate_on_end=True)
     dataset, state_mean, state_std = func.normalize_dataset(config, dataset)
-
+    config.state_std = state_std
+    config.act_std = np.std(dataset["actions"], axis=0) + 1e-6
+    config.rew_std = np.std(dataset["rewards"]) + 1e-6
     env = func.wrap_env(env, state_mean=state_mean, state_std=state_std)
     env.seed(config.seed)
 
@@ -494,31 +574,37 @@ def test(config: TrainConfig, logger: Logger):
         if f.startswith("policy") and f.endswith(".pth")
     ]
     model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
+    best_score = -float('inf')
+    best_epoch = 0
     for i, model_epoch in enumerate(model_epoches):
         epoch = int(model_epoch.split(".")[0].split("_")[1])
         print(f"eval epoch: {epoch}")
         actor.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch))["actor"])
         actor.eval()
-    # logger.info(f"Actor Network: \n{str(actor)}")
 
-        if config.eval_attack:
-            state_std, act_std, rew_std, rew_min = func.get_state_std(config)
-            eval_attacker = Evaluation_Attacker(
-                config, config.env, config.corruption_agent, config.eval_attack_eps,
-                state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
-                MODEL_PATH[config.corruption_agent],
-            )
-            print("eval_attack: True")
+        if config.test_attack_mode == "nsaop":
+            eval_log = eval_actor_nsaop(config, env, actor)
         else:
-            eval_attacker = None
-            print("eval_attack: False")
-
-        eval_log = func.eval(config, env, actor, eval_attacker)
+            if config.eval_attack:
+                state_std, act_std, rew_std, rew_min = func.get_state_std(config)
+                eval_attacker = Evaluation_Attacker(
+                    config, config.env, config.corruption_agent, config.eval_attack_eps,
+                    state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
+                    MODEL_PATH[config.corruption_agent],
+                )
+                print("eval_attack: True")
+            else:
+                eval_attacker = None
+                print("eval_attack: False")
+            eval_log = func.eval(config, env, actor, eval_attacker)
         for k, v in eval_log.items():
             logger.record(k, v)
         logger.dump(0)
 
         score = eval_log[f"eval/normalized_score_mean"]
+        if score > best_score:
+            best_score = score
+            best_epoch = epoch
         eval_atta_tag = "attack" if config.eval_attack else "clean"
         # train_time = config.checkpoint_dir.split("_")[-2]
         log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(logger.get_dir()))),
@@ -526,6 +612,9 @@ def test(config: TrainConfig, logger: Logger):
         title = f"{config.group}_{config.env}_{config.corruption_mode}_{config.corruption_tag}_{eval_atta_tag}_{config.seed}"
         with open(log_path, "a") as f:
             f.write(f"{title}: {score:.4f}\n")
+    if best_score > -float('inf'):
+        with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
+            f.write(f"{best_score:.4f}_{best_epoch}")
 
 
 @pyrallis.wrap()

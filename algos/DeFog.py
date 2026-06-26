@@ -27,7 +27,7 @@ from utils.attack import attack_dataset
 from utils.drop_fn import get_drop_fn
 from utils.attack import Evaluation_Attacker
 from datetime import datetime
-
+from utils.dt_functions import NSAOPObsAttacker, NSAOPActAttacker, NSAOPRewAttacker
 MODEL_PATH = {
     "IQL": os.path.join(os.path.dirname(os.path.dirname(__file__)), "IQL_model"),
 }
@@ -106,7 +106,9 @@ class TrainConfig:
     use_original: int = 0  # 0 or 1
     same_index: int = 0
     froce_attack: int = 0
-
+    # NSAOP 测试模式
+    test_attack_mode: str = ""          # 设为 "nsaop" 启用
+    nsaop_eps_coeff: float = 1.0
     def __post_init__(self):
         # train
         # if not self.eval_only:
@@ -275,6 +277,7 @@ def load_d4rl_trajectories(
         "obs_mean": state_mean,  # dataset["observations"].mean(0, keepdims=True),
         "obs_std": state_std,  # dataset["observations"].std(0, keepdims=True) + 1e-6,
         "traj_lens": np.array(traj_len),
+        "rew_std": np.std(dataset["rewards"]) + 1e-6,
     }
     return traj, info
 
@@ -324,6 +327,7 @@ class SequenceBuffer():
                                                                                      self.traj_returns.sum() if config.sample_type == 'traj_return' else self.traj_length / self.traj_length.sum()
         # self.state_mean, self.state_std = self.states.mean(axis=0), self.states.std(axis=0) + 1e-6
         self.state_mean, self.state_std = info["obs_mean"], info["obs_std"]
+        self.rew_std = info["rew_std"]
         self.drop_fn = get_drop_fn(config, self.size, self.traj_sp, self.rng)
 
     def sample(self, batch_size):
@@ -576,6 +580,8 @@ def eval_rollout(
         eval_corruption_rate: float = 0.0,
         eval_attack_tag: str = "obs",
         device: str = "cpu",
+        nsaop_attacker = None,
+
 ) -> Tuple[float, float]:
     # parallel evaluation with vectorized environment
     action_range = [
@@ -595,7 +601,9 @@ def eval_rollout(
     timesteps = torch.arange(max_timestep, device=device)
     dropsteps = torch.zeros(max_timestep, device=device, dtype=torch.long)
     state = env.reset()
-    if eval_attacker is not None and eval_attack_tag == "obs":
+    if nsaop_attacker and nsaop_attacker.get('obs'):
+        state = nsaop_attacker['obs'].attack_obs(state)
+    elif eval_attacker is not None and eval_attack_tag == "obs":
         attack_flag = np.random.rand()
         if attack_flag < eval_corruption_rate:
             state = eval_attacker.attack_obs(state)
@@ -618,7 +626,9 @@ def eval_rollout(
                                            dropsteps[None, obs_index])
 
         action = action_preds[:, -1].detach().cpu()
-        if eval_attacker is not None and eval_attack_tag == "act":
+        if nsaop_attacker and nsaop_attacker.get('act'):
+            action = nsaop_attacker['act'].attack_act(action)
+        elif eval_attacker is not None and eval_attack_tag == "act":
             attack_flag = np.random.rand()
             if attack_flag < eval_corruption_rate:
                 action = eval_attacker.attack_act(action)
@@ -628,11 +638,15 @@ def eval_rollout(
 
         state, reward, dones, info = env.step(action[0].cpu().numpy())
         returns += reward * ~done_flags
-        if eval_attacker is not None and eval_attack_tag == "obs":
+        if nsaop_attacker and nsaop_attacker.get('obs'):
+            state = nsaop_attacker['obs'].attack_obs(state)
+        elif eval_attacker is not None and eval_attack_tag == "obs":
             attack_flag = np.random.rand()
             if attack_flag < eval_corruption_rate:
                 state = eval_attacker.attack_obs(state)
-        if eval_attacker is not None and eval_attack_tag == "rew":
+        if nsaop_attacker and nsaop_attacker.get('rew'):
+            reward = nsaop_attacker['rew'].attack_rew(reward)
+        elif eval_attacker is not None and eval_attack_tag == "rew":
             attack_flag = np.random.rand()
             if attack_flag < eval_corruption_rate:
                 reward = eval_attacker.attack_rew(reward)
@@ -644,6 +658,40 @@ def eval_rollout(
 
 
 def eval_fn(config, env, model, eval_attacker=None):
+    nsaop_attacker = None
+    if config.test_attack_mode == "nsaop":
+        nsaop_attacker = {}
+        if config.corruption_tag == "obs":
+            nsaop_attacker['obs'] = NSAOPObsAttacker(
+                state_dim=config.state_dim,
+                state_std=config.state_std,
+                eps_coeff=config.nsaop_eps_coeff,
+                device=config.device,
+            )
+        elif config.corruption_tag == "act":
+            nsaop_attacker['act'] = NSAOPActAttacker(
+                action_dim=config.action_dim,
+                action_std=config.act_std,
+                action_low=env.action_space.low,
+                action_high=env.action_space.high,
+                eps_coeff=config.nsaop_eps_coeff,
+                device=config.device,
+            )
+        elif config.corruption_tag == "rew":
+            # 统一奖励攻击量纲（与 RDT/BC/CQL 一致）
+            if config.env.startswith("antmaze") or config.env.startswith("kitchen") or \
+               config.env.split("-")[0] in ["door", "pen", "hammer", "relocate"]:
+                attack_rew_scale = 1.0
+            elif config.env.startswith("hopper") or config.env.startswith("halfcheetah") or config.env.startswith("walker"):
+                attack_rew_scale = 0.001
+            else:
+                attack_rew_scale = 1.0
+            nsaop_attacker['rew'] = NSAOPRewAttacker(
+                rew_std=config.rew_std,
+                reward_scale=attack_rew_scale,
+                eps_coeff=config.nsaop_eps_coeff,
+                device=config.device,
+            )
     if config.corruption_obs > 0:
         eval_attack_tag = "obs"
     if config.corruption_act > 0:
@@ -662,6 +710,7 @@ def eval_fn(config, env, model, eval_attacker=None):
                 eval_corruption_rate=config.eval_corruption_rate,
                 eval_attack_tag=eval_attack_tag,
                 device=config.device,
+                nsaop_attacker=nsaop_attacker,
             )
             # unscale for logging & correct normalized score computation
             eval_returns.append(eval_return)
@@ -697,6 +746,9 @@ def train(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = SequenceBuffer(config, logger)
+    config.state_std = dataset.state_std
+    config.act_std = np.std(dataset.actions, axis=0) + 1e-6
+    config.rew_std = dataset.rew_std
     logger.info(f"Dataset: {dataset.num_trajs} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 
@@ -875,6 +927,9 @@ def test(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = SequenceBuffer(config, logger)
+    config.state_std = dataset.state_std
+    config.act_std = np.std(dataset.actions, axis=0) + 1e-6
+    config.rew_std = dataset.rew_std
     # logger.info(f"Dataset: {dataset.num_trajs} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 

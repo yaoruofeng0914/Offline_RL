@@ -95,7 +95,9 @@ class TrainConfig:
     use_original: int = 0  # 0 or 1
     same_index: int = 0
     froce_attack: int = 0
-
+    # NSAOP 测试模式
+    test_attack_mode: str = ""          # 设为 "nsaop" 启用
+    nsaop_eps_coeff: float = 1.0
     def __post_init__(self):
         # train
         # if not self.eval_only:
@@ -219,6 +221,9 @@ def train(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = dt_func.SequenceDataset(config, logger)
+    config.state_std = dataset.state_std
+    config.act_std = dataset.act_std
+    config.rew_std = dataset.rew_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 
@@ -313,6 +318,8 @@ def train(config: TrainConfig, logger: Logger):
 
         # validation in the env for the actual online performance
         if epoch % config.eval_every == 0 and epoch > (config.num_epochs - config.eval_final):
+            if config.test_attack_mode == "nsaop":
+                eval_attacker = None
             model.eval()
             eval_log = dt_func.eval_fn(config, env, model)
             model.train()
@@ -382,6 +389,9 @@ def test(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = dt_func.SequenceDataset(config, logger)
+    config.state_std = dataset.state_std
+    config.act_std = dataset.act_std
+    config.rew_std = dataset.rew_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 
@@ -424,7 +434,8 @@ def test(config: TrainConfig, logger: Logger):
         model.eval()
         # logger.info(f"Network: \n{str(model)}")
         # logger.info(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
-
+        if config.test_attack_mode == "nsaop":
+            eval_attacker = None
         eval_log = dt_func.eval_fn(config, env, model, eval_attacker)
         for k, v in eval_log.items():
             logger.record(k, v)

@@ -31,7 +31,7 @@ from utils.replay_buffer import ReplayBuffer
 from utils.networks import Scalar, MLP
 from utils.attack import Evaluation_Attacker
 from datetime import datetime
-
+from utils.dt_functions import NSAOPObsAttacker, NSAOPActAttacker, NSAOPRewAttacker
 MODEL_PATH = {
     "IQL": os.path.join(os.path.dirname(os.path.dirname(__file__)), "IQL_model"),
 }
@@ -110,6 +110,9 @@ class TrainConfig:
     use_original: int = 0  # 0 or 1
     same_index: int = 0
     froce_attack: int = 0
+    # NSAOP 测试模式
+    test_attack_mode: str = ""  # 设为 "nsaop" 启用
+    nsaop_eps_coeff: float = 1.0
 
     def __post_init__(self):
         # train
@@ -193,7 +196,7 @@ class TrainConfig:
         self.eval_corruption_rate = 0.3
         if self.eval_attack_mode == "random" and self.corruption_tag == "rew":
             self.eval_attack_eps *= 30
-
+        # NSAOP 测试模式
 
 class ReparameterizedTanhGaussian(nn.Module):
     def __init__(
@@ -766,6 +769,80 @@ class ContinuousCQL:
             state_dict=state_dict["cql_log_alpha_optim"]
         )
         self.total_it = state_dict["total_it"]
+def eval_actor_nsaop(config, env, actor):
+    """使用 NSAOP 攻击器的评估函数（参考 func.eval_actor 结构）"""
+    device = config.device
+    n_episodes = config.eval_episodes
+    action_range = [
+        float(env.action_space.low.min()) + 1e-6,
+        float(env.action_space.high.max()) - 1e-6,
+    ]
+
+    # 初始化 NSAOP 攻击器
+    nsaop_obs = nsaop_act = nsaop_rew = None
+    if config.corruption_tag == "obs":
+        nsaop_obs = NSAOPObsAttacker(
+            state_dim=env.observation_space.shape[0],
+            state_std=config.state_std,
+            eps_coeff=config.nsaop_eps_coeff,
+            device=device,
+        )
+    elif config.corruption_tag == "act":
+        nsaop_act = NSAOPActAttacker(
+            action_dim=env.action_space.shape[0],
+            action_std=config.act_std,
+            action_low=env.action_space.low,
+            action_high=env.action_space.high,
+            eps_coeff=config.nsaop_eps_coeff,
+            device=device,
+        )
+    elif config.corruption_tag == "rew":
+        # 统一 NSAOP 奖励攻击的量纲（与 RDT/BC 一致，不受 CQL 特殊 reward_scale 影响）
+        if config.env.startswith("antmaze") or config.env.startswith("kitchen") or \
+           config.env.split("-")[0] in ["door", "pen", "hammer", "relocate"]:
+            attack_rew_scale = 1.0
+        elif config.env.startswith("hopper") or config.env.startswith("halfcheetah") or config.env.startswith("walker"):
+            attack_rew_scale = 0.001
+        else:
+            attack_rew_scale = 1.0
+        nsaop_rew = NSAOPRewAttacker(
+            rew_std=config.rew_std,
+            reward_scale=attack_rew_scale,
+            eps_coeff=config.nsaop_eps_coeff,
+            device=device,
+        )
+
+    actor.eval()
+    episode_rewards = []
+    for _ in trange(n_episodes):
+        state, done = env.reset(), False
+        if nsaop_obs:
+            state = nsaop_obs.attack_obs(state)
+        episode_reward = 0.0
+        while not done:
+            action = actor.act(state, device)
+            if nsaop_act:
+                action = nsaop_act.attack_act(action)
+            action = np.clip(action, *action_range)
+            next_state, reward, done, _ = env.step(action)
+            if nsaop_obs:
+                next_state = nsaop_obs.attack_obs(next_state)
+            if nsaop_rew:
+                reward = nsaop_rew.attack_rew(reward)
+            episode_reward += reward
+            state = next_state
+        episode_rewards.append(episode_reward)
+
+    actor.train()
+    eval_returns = np.array(episode_rewards)
+    normalized_score = env.get_normalized_score(eval_returns) * 100.0
+    eval_log = {
+        "eval/reward_mean": np.mean(eval_returns),
+        "eval/reward_std": np.std(eval_returns),
+        "eval/normalized_score_mean": np.mean(normalized_score),
+        "eval/normalized_score_std": np.std(normalized_score),
+    }
+    return eval_log
 
 
 def train(config: TrainConfig, logger: Logger):
@@ -798,6 +875,9 @@ def train(config: TrainConfig, logger: Logger):
 
     dataset = d4rl.qlearning_dataset(env, dataset, terminate_on_end=True)
     dataset, state_mean, state_std = func.normalize_dataset(config, dataset)
+    config.state_std = state_std
+    config.act_std = np.std(dataset["actions"], axis=0) + 1e-6
+    config.rew_std = np.std(dataset["rewards"]) + 1e-6
     # logger.info("state mean: ", state_mean)
     # logger.info("state std: ", state_std)
 
@@ -921,7 +1001,10 @@ def train(config: TrainConfig, logger: Logger):
 
         # Evaluate episode
         if epoch % config.eval_every == 0 and epoch > (config.num_epochs - config.eval_final):
-            eval_log = func.eval(config, env, actor)
+            if config.test_attack_mode == "nsaop":
+                eval_log = eval_actor_nsaop(config, env, actor)
+            else:
+                eval_log = func.eval(config, env, actor)
             logger.record("epoch", epoch)
             logger.record("epoch_time", epoch_time)
             for k, v in eval_log.items():
@@ -1002,6 +1085,9 @@ def test(config: TrainConfig, logger: Logger):
 
     dataset = d4rl.qlearning_dataset(env, dataset, terminate_on_end=True)
     dataset, state_mean, state_std = func.normalize_dataset(config, dataset)
+    config.state_std = state_std
+    config.act_std = np.std(dataset["actions"], axis=0) + 1e-6
+    config.rew_std = np.std(dataset["rewards"]) + 1e-6
     # logger.info("state mean: ", state_mean)
     # logger.info("state std: ", state_std)
 
@@ -1029,19 +1115,21 @@ def test(config: TrainConfig, logger: Logger):
         actor.eval()
         # logger.info(f"Actor Network: \n{str(actor)}")
 
-        if config.eval_attack:
-            state_std, act_std, rew_std, rew_min = func.get_state_std(config)
-            eval_attacker = Evaluation_Attacker(
-                config, config.env, config.corruption_agent, config.eval_attack_eps,
-                state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
-                MODEL_PATH[config.corruption_agent],
-            )
-            print("eval_attack: True")
+        if config.test_attack_mode == "nsaop":
+            eval_log = eval_actor_nsaop(config, env, actor)
         else:
-            eval_attacker = None
-            print("eval_attack: False")
-
-        eval_log = func.eval(config, env, actor, eval_attacker)
+            if config.eval_attack:
+                state_std, act_std, rew_std, rew_min = func.get_state_std(config)
+                eval_attacker = Evaluation_Attacker(
+                    config, config.env, config.corruption_agent, config.eval_attack_eps,
+                    state_dim, action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
+                    MODEL_PATH[config.corruption_agent],
+                )
+                print("eval_attack: True")
+            else:
+                eval_attacker = None
+                print("eval_attack: False")
+            eval_log = func.eval(config, env, actor, eval_attacker)
         for k, v in eval_log.items():
             logger.record(k, v)
         logger.dump(0)

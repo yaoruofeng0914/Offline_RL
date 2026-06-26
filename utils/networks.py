@@ -223,11 +223,10 @@ class TransformerBlock(nn.Module):
             scale = d_k ** -0.5
             attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale
 
-            # 不确定性门控 (修正版：使用加法惩罚)
-            penalty = torch.exp(log_lambda) * var_seq  # λ * σ²
-            penalty = penalty.unsqueeze(1).unsqueeze(2)  # [B, 1, 1, L]
-            attn_weights = attn_weights - penalty  # 加性惩罚
-
+            # 不确定性门控 ( 修正版：使用加法惩罚)
+            temperature = 1.0 + torch.exp(log_lambda) * var_seq
+            temperature = temperature.unsqueeze(1).unsqueeze(2)
+            attn_weights = attn_weights / temperature
             # 因果掩码
             mask = self.causal_mask[:L, :L].unsqueeze(0).unsqueeze(0)  # [1, 1, L, L]
             attn_weights = attn_weights.masked_fill(mask, float('-inf'))

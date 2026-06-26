@@ -11,8 +11,8 @@ ENVS=(
 #"walker2d-medium-replay-v2"
 )
 MODES=(
-"random"
-#"adversarial"
+#"random"
+"adversarial"
 )
 
 TAGS=(
@@ -26,7 +26,7 @@ SEEDS=(
 #1
 )
 
-LOG_DIR="full_logs_udt"          # 改为 UDT 日志目录
+LOG_DIR="full_logs_udt"          # 改为                                               UDT 日志目录
 mkdir -p "$LOG_DIR"
 
 MAX_PARALLEL=3

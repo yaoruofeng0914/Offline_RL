@@ -5,7 +5,7 @@ import os, sys
 sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from typing import Optional, Tuple
-
+import math
 import traceback
 import time
 import json
@@ -14,7 +14,6 @@ import gym
 import numpy as np
 import pyrallis
 import torch
-import math
 import wandb
 import utils.functions as func
 import utils.dt_functions_UDT as dt_func
@@ -100,11 +99,7 @@ class TrainConfig:
 
     test_attack_mode: str = ""   # 留空表示跟随 corruption_mode，设为 "nsaop" 启用新基准
 
-    beta: float = 0.00001   # KL散度正则化系数
-    # ========== DAVR 双重自适应正则化参数 ==========
-    dapa_threshold: float = 50.0        # 数据量阈值 N0
-    rew_error_tau: float = 1.0          # 奖励误差温度 τ
-    rew_error_ema_decay: float = 0.9    # 误差平滑系数
+    beta: float = 0.000001   # KL散度正则化系数
     use_udt: bool = True
 
     # ========== 新增：RDT 训练策略参数 ==========
@@ -116,11 +111,11 @@ class TrainConfig:
     correct_start: int = 50                 # 从第几个 epoch 开始校正
     correct_thershold: Tuple[float] = None  # 异常值校正阈值 (act, rew)
     # ===========================================
-    # ========== 新增：UDT 熵权参数 =======
-    entropy_theta: float = 182.0
-    entropy_baseline: float = 184.0
-    lambda_ent : float = 3e-6 # 中心阈值 (略高于当前熵均值 181)
-    # ===========================================
+    dapa_threshold: float = 30.0  # 数据量感知退火中心点
+    dapa_steepness: float = 0.5  # 过渡平滑度
+    rew_error_tau: float = 1.0  # 奖励误差温度
+    rew_error_ema_decay: float = 0.9  # EMA 衰减系数
+    kl_warmup_steps: int = 20000  # KL 预热步数
 
     def __post_init__(self):
         # train
@@ -235,7 +230,6 @@ class TrainConfig:
             self.update_steps = int(self.num_epochs * self.num_updates_on_epoch)
             self.warmup_steps = int(0.1 * self.update_steps)
             self.decay_steps = int(0.1 * self.update_steps)
-            # 根据攻击类型动态启用方案B：仅动作攻击时开启，其余攻击关闭
         # evaluation
         # if self.eval_only:
             # assert self.checkpoint_dir is not None, "Please provide checkpoint_dir for evaluation."
@@ -261,6 +255,7 @@ class TrainConfig:
         #     self.eval_attack_mode = self.test_attack_mode
         # else:
         #     self.eval_attack_mode = self.corruption_mode
+
 
 def set_model(config: TrainConfig):
     model = dt_func.DecisionTransformer(
@@ -323,21 +318,6 @@ def correct_outliers(config, data_info, data_dist, correct=False):  # New
             diff = diff[np.where(mask.cpu().numpy() == 1)]
             dist.update(diff)
     return correct_info, correct_dict
-def loss_fn(config, predicted, target, mask, coef=None):
-    """
-    纯 WMSE 损失函数（熵信任度已移除）。
-    """
-    log_info = {}
-    with torch.no_grad():
-        diff = torch.square(predicted.detach() - target.detach()).mean(-1, keepdim=True)
-        weight = torch.exp(-coef * diff)
-
-    log_info["weight_mean"] = weight[mask.to(torch.bool)].mean().item()
-
-    loss = F.mse_loss(predicted, target.detach(), reduction="none")
-    loss = (loss * weight * mask.unsqueeze(-1)).mean()
-
-    return loss, log_info
 
 def train(config: TrainConfig, logger: Logger):
     # Set seeds
@@ -361,23 +341,14 @@ def train(config: TrainConfig, logger: Logger):
     config.rew_std = dataset.rew_std
     config.act_std = dataset.act_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
-    # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
-    # 计算数据量感知因子 alpha
-    # 计算数据量感知因子 alpha
-    num_trajectories = len(dataset.dataset)
 
-    # 获取平滑过渡的超参数 (可以在 TrainConfig 中预设)
-    # dapa_threshold (N_0): 过渡的中心点，推荐设在 30 左右 (介于 Kitchen 的 19 和其他环境的 100 之间)
-    # dapa_steepness (k): 控制退化曲线的陡峭程度，推荐设为 0.5
+    num_trajectories = len(dataset.dataset)
     dapa_threshold = getattr(config, 'dapa_threshold', 30.0)
     dapa_steepness = getattr(config, 'dapa_steepness', 0.5)
-
-    # 核心修改：使用 Sigmoid 函数实现完全连续的先验退化映射
-    # 当 N = 19 时，alpha 约为 0.004 (等效于关闭先验)
-    # 当 N = 100 时，alpha 约为 1.0 (全量先验)
     config.alpha = 1.0 / (1.0 + math.exp(-dapa_steepness * (num_trajectories - dapa_threshold)))
-
-    logger.info(f"Num trajectories: {num_trajectories}, Continuous Alpha: {config.alpha:.6f}")
+    logger.info(f"Num trajectories: {num_trajectories}, Alpha: {config.alpha:.6f}")
+    # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
+    config.ema_rew_error = 1.0
     env = func.wrap_env(
         env,
         state_mean=dataset.state_mean,
@@ -451,8 +422,6 @@ def train(config: TrainConfig, logger: Logger):
         # log_lambda 默认 requires_grad=True，无需手动设置
         for step in trange(config.num_updates_on_epoch, desc="Epoch", leave=False):
             log_dict = {}
-            if not hasattr(config, 'ema_rew_error'):
-                config.ema_rew_error = 1.0
             # batch = next(trainloader_iter)
             batch = dataset.get_batch(config.batch_size, config.recalculate_return)
             states, actions, returns, rewards, time_steps, mask, attack_mask, traj_indexs = [b.to(config.device) for b
@@ -465,7 +434,6 @@ def train(config: TrainConfig, logger: Logger):
                 returns_to_go=returns,
                 time_steps=time_steps,
                 padding_mask=padding_mask,
-                alpha = config.alpha,
             )
             predicted_actions = predicted[0]
             predicted_rewards = predicted[1]  # 奖励预测，WMSE 和异常值校正需要
@@ -473,171 +441,75 @@ def train(config: TrainConfig, logger: Logger):
             udt_info = predicted[2]
 
             # ========== RDT 风格的加权均方误差 (WMSE) ==========
-            # ========== 解包 udt_info，准备 logvar ==========
-            if config.use_udt and udt_info is not None:
-                state_mu, state_logvar, act_mu, act_logvar, ret_mu, ret_logvar = udt_info
-                state_logvar_for_loss = state_logvar
-                act_logvar_for_loss = act_logvar
-                ret_logvar_for_loss = ret_logvar
-            else:
-                act_logvar_for_loss = None
-                ret_logvar_for_loss = None
+            # ========== RDT 风格的加权均方误差 (WMSE) ==========
+            def wmse_loss(pred, target, mask, coef):
+                """带掩码的加权均方误差"""
+                with torch.no_grad():
+                    diff = torch.square(pred.detach() - target.detach()).mean(-1, keepdim=True)
+                    weight = torch.exp(-coef * diff)
+                loss = F.mse_loss(pred, target.detach(), reduction="none")
+                loss = (loss * weight) * mask.unsqueeze(-1)
+                return loss.mean()
 
-            # ========== 动作和奖励损失（根据 loss_weight_type 自动选择 wmse 或 entropy） ==========
-            # 计算 gamma_rew（基于上一轮 EMA）
+            loss_action = wmse_loss(predicted_actions, actions, mask, config.wmse_coef[0])
+            loss_reward = wmse_loss(predicted_rewards, rewards, mask, config.wmse_coef[1])
+
+            # ---------- 奖励误差 EMA 更新 ----------
+            with torch.no_grad():
+                rew_mse_per_token = F.mse_loss(predicted_rewards, rewards, reduction='none').mean(dim=-1)
+                valid_mask = mask.to(torch.bool)
+                if valid_mask.sum() > 0:
+                    raw_error = rew_mse_per_token[valid_mask].mean().item()
+                else:
+                    raw_error = 0.0
+                norm_error = raw_error / (config.rew_std ** 2 + 1e-6)
+                config.ema_rew_error = (config.rew_error_ema_decay * config.ema_rew_error
+                                        + (1 - config.rew_error_ema_decay) * norm_error)
+
             gamma_rew = math.exp(-config.ema_rew_error / config.rew_error_tau)
             gamma_rew = max(gamma_rew, 0.1)
 
-            # 动作和奖励损失（纯 WMSE）
-            loss_action, action_log_info = loss_fn(
-                config, predicted_actions, actions, mask,
-                coef=config.wmse_coef[0]
-            )
-            loss_reward, reward_log_info = loss_fn(
-                config, predicted_rewards, rewards, mask,
-                coef=config.wmse_coef[1]
-            )
-
-            # 更新奖励误差 EMA
-            # 更新奖励误差 EMA（仅对有效 token，避免 padding 稀释）
-            with torch.no_grad():
-                # token-wise MSE，形状 (batch, seq_len)
-                rew_error_per_token = F.mse_loss(predicted_rewards, rewards, reduction='none').mean(dim=-1)
-                valid_mask = mask.to(torch.bool)
-                if valid_mask.sum() > 0:
-                    raw_rew_error = rew_error_per_token[valid_mask].mean().item()
-                else:
-                    raw_rew_error = 0.0
-                # 归一化（与数据集固有方差比较）
-                norm_rew_error = raw_rew_error / (config.rew_std ** 2 + 1e-6)
-                config.ema_rew_error = (config.rew_error_ema_decay * config.ema_rew_error
-                                        + (1 - config.rew_error_ema_decay) * norm_rew_error)
-
-            # ========== KL 散度约束与退火 + 方案 B 熵提升 ==========
+            # ---------- KL 散度计算 ----------
             kl_total = torch.tensor(0.0, device=config.device)
             current_beta = 0.0
-            ent_boost_loss = torch.tensor(0.0, device=config.device)
-
             if config.use_udt and udt_info is not None:
                 state_mu, state_logvar, act_mu, act_logvar, ret_mu, ret_logvar = udt_info
-                kl_warmup = getattr(config, 'kl_warmup_steps', 20000)
-                beta_target = getattr(config, 'beta', 0.00001)
-                if kl_warmup > 0:
-                    current_beta = beta_target * min(1.0, total_updates / kl_warmup)
-                else:
-                    current_beta = beta_target
-
-                # ========== 数值安全锁：防止 logvar 溢出 ==========
                 MAX_LOGVAR = 5.0
                 MIN_LOGVAR = -10.0
                 state_logvar = torch.clamp(state_logvar, MIN_LOGVAR, MAX_LOGVAR)
                 act_logvar = torch.clamp(act_logvar, MIN_LOGVAR, MAX_LOGVAR)
                 ret_logvar = torch.clamp(ret_logvar, MIN_LOGVAR, MAX_LOGVAR)
 
-                # =========================================================
-                # 终极形态：模态独立掩码解耦 (Modality-Specific Masked Decoupling)
-                # 理念：谁被攻击谁解耦，干净模态继续受 N(0,1) 严格保护
-                # =========================================================
-                # 1. 计算未缩减的 KL [Batch, Seq_len]
-                kl_state_raw = -0.5 * torch.sum(1 + state_logvar - state_mu.pow(2) - state_logvar.exp(), dim=-1)
-                kl_act_raw = -0.5 * torch.sum(1 + act_logvar - act_mu.pow(2) - act_logvar.exp(), dim=-1)
-                kl_ret_raw = -0.5 * torch.sum(1 + ret_logvar - ret_mu.pow(2) - ret_logvar.exp(), dim=-1)
+                kl_state = -0.5 * torch.sum(1 + state_logvar - state_mu.pow(2) - state_logvar.exp(), dim=-1)
+                kl_act = -0.5 * torch.sum(1 + act_logvar - act_mu.pow(2) - act_logvar.exp(), dim=-1)
+                kl_ret = -0.5 * torch.sum(1 + ret_logvar - ret_mu.pow(2) - ret_logvar.exp(), dim=-1)
 
-                # 2. 模态独立掩码解耦 (Modality-Specific Masking)
                 valid_mask = mask.to(torch.bool)
-                if attack_mask is not None:
-                    attack_mask_bool = (attack_mask.squeeze(-1) > 0).to(torch.bool)
+                if valid_mask.sum() > 0:
+                    kl_state_mean = kl_state[valid_mask].mean()
+                    kl_act_mean = kl_act[valid_mask].mean()
+                    kl_ret_mean = kl_ret[valid_mask].mean()
                 else:
-                    attack_mask_bool = torch.zeros_like(valid_mask)
+                    kl_state_mean = kl_act_mean = kl_ret_mean = torch.tensor(0.0, device=config.device)
 
-                # 核心修正：仅针对被攻击的模态解耦。没被攻击的干净模态，始终用 valid_mask 维持 N(0,1) 锚点保护！
-                mask_state = valid_mask & (~attack_mask_bool) if config.corruption_tag == "obs" else valid_mask
-                mask_act = valid_mask & (~attack_mask_bool) if config.corruption_tag == "act" else valid_mask
-                mask_ret = valid_mask & (~attack_mask_bool) if config.corruption_tag == "rew" else valid_mask
+                kl_total = (kl_state_mean + kl_act_mean + gamma_rew * kl_ret_mean) / 3.0
 
-                # 3. 独立计算各模态的 KL
-                if mask_state.sum() > 0:
-                    kl_state = kl_state_raw[mask_state].mean()
-                else:
-                    kl_state = torch.tensor(0.0, device=config.device)
+                kl_warmup_steps = getattr(config, 'kl_warmup_steps', 20000)
+                current_beta = config.beta * min(1.0, total_updates / kl_warmup_steps)
 
-                if mask_act.sum() > 0:
-                    kl_act = kl_act_raw[mask_act].mean()
-                else:
-                    kl_act = torch.tensor(0.0, device=config.device)
+            # ---------- 总损失 ----------
+            loss_total = loss_action + config.reward_coef * loss_reward \
+                         + config.alpha * current_beta * kl_total
 
-                if mask_ret.sum() > 0:
-                    kl_ret = kl_ret_raw[mask_ret].mean()
-                else:
-                    kl_ret = torch.tensor(0.0, device=config.device)
-
-                alpha = config.alpha
-                kl_total = alpha * current_beta * (kl_state + kl_act) + alpha * current_beta * gamma_rew * kl_ret
-
-                # 方案 B 部分保持不变 ...
-
-                if config.lambda_ent > 0 and attack_mask is not None:
-                    attack_mask_bool = (attack_mask.squeeze(-1) > 0).to(torch.bool)
-                    valid_mask = mask.to(torch.bool)
-                    attack_token_mask = valid_mask & attack_mask_bool
-
-                    if attack_token_mask.sum() > 0:
-                        state_entropy = 0.5 * torch.sum(
-                            state_logvar + 1.0 + np.log(2 * np.pi), dim=-1
-                        )
-                        act_entropy = 0.5 * torch.sum(
-                            act_logvar + 1.0 + np.log(2 * np.pi), dim=-1
-                        )
-
-                        ent_boost = (
-                                            (state_entropy[attack_token_mask] - config.entropy_baseline).clamp(
-                                                min=0).mean() +
-                                            (act_entropy[attack_token_mask] - config.entropy_baseline).clamp(
-                                                min=0).mean()
-                                    ) * 0.5
-                        ent_boost_loss = - config.lambda_ent * config.alpha * ent_boost
-            # 合并总损失（KL 和方案 B 已经在上面计算完毕）
-            loss_total = loss_action + config.reward_coef * loss_reward + kl_total + ent_boost_loss
             optim.zero_grad()
             loss_total.backward()
 
+            # 梯度裁剪
             if config.clip_grad is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip_grad)
             optim.step()
 
-            # ========== 熵监控（观察 KL 加入后的变化） ==========
-            if config.use_udt and udt_info is not None:
-                # 重新解包 udt_info，得到 logvar（忽略 mu）
-                _, state_logvar, _, act_logvar, _, ret_logvar = udt_info
-
-                def calc_entropy(logvar, mask, attack_mask, name, log_dict):
-                    with torch.no_grad():
-                        entropy = 0.5 * torch.sum(logvar + 1.0 + np.log(2 * np.pi), dim=-1)  # (batch, seq_len)
-                        valid_mask = mask.to(torch.bool)
-                        attack_mask_bool = (attack_mask.squeeze(-1) > 0).to(torch.bool)
-
-                        all_ent = entropy[valid_mask]
-                        attack_ent = entropy[valid_mask & attack_mask_bool]
-
-                        log_dict[f"entropy/{name}_mean"] = all_ent.mean().item()
-                        log_dict[f"entropy/{name}_std"] = all_ent.std().item() if all_ent.numel() > 1 else 0.0
-                        log_dict[f"entropy/{name}_max"] = all_ent.max().item() if all_ent.numel() > 0 else 0.0
-                        log_dict[f"entropy/{name}_min"] = all_ent.min().item() if all_ent.numel() > 0 else 0.0
-
-                        if attack_ent.numel() > 0:
-                            log_dict[f"entropy/attack_{name}_mean"] = attack_ent.mean().item()
-                            log_dict[
-                                f"entropy/attack_{name}_std"] = attack_ent.std().item() if attack_ent.numel() > 1 else 0.0
-                        else:
-                            log_dict[f"entropy/attack_{name}_mean"] = 0.0
-                            log_dict[f"entropy/attack_{name}_std"] = 0.0
-
-                calc_entropy(state_logvar, mask, attack_mask, "state", log_dict)
-                calc_entropy(act_logvar, mask, attack_mask, "act", log_dict)
-                calc_entropy(ret_logvar, mask, attack_mask, "ret", log_dict)
-            # =====================================================
-
-            # 记录日志（只需一次）
+            # 记录日志
             log_dict.update({
                 "loss_action": loss_action.item(),
                 "loss_reward": loss_reward.item(),
@@ -646,14 +518,9 @@ def train(config: TrainConfig, logger: Logger):
                 "alpha": config.alpha,
                 "gamma_rew": gamma_rew,
                 "ema_rew_error": config.ema_rew_error,
-                "ent_boost_loss": ent_boost_loss.item(),
                 "policy_loss": loss_total.item(),
                 "learning_rate": scheduler.get_last_lr()[0],
             })
-            for k, v in action_log_info.items():
-                log_dict[f"act_{k}"] = v
-            for k, v in reward_log_info.items():
-                log_dict[f"rew_{k}"] = v
             scheduler.step()
             total_updates += 1
 
@@ -758,11 +625,7 @@ def test(config: TrainConfig, logger: Logger):
     config.act_std = dataset.act_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
-    num_trajectories = len(dataset.dataset)
-    dapa_threshold = getattr(config, 'dapa_threshold', 30.0)
-    dapa_steepness = getattr(config, 'dapa_steepness', 0.5)
-    config.alpha = 1.0 / (1.0 + math.exp(-dapa_steepness * (num_trajectories - dapa_threshold)))
-    logger.info(f"Test Alpha: {config.alpha:.6f}")
+
     env = func.wrap_env(
         env,
         state_mean=dataset.state_mean,
