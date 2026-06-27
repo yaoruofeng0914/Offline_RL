@@ -397,7 +397,7 @@ class DecisionTransformer(nn.Module):
             self.action_emb = BayesianEmbedding(action_dim, embedding_dim)
             self.return_emb = BayesianEmbedding(1, embedding_dim)
             self.log_lambda = nn.Parameter(torch.tensor(0.0))  # 初始化为 0，即 λ=1
-            self.log_lambda.requires_grad = False  # 暂不修改梯度设置
+            # self.log_lambda.requires_grad = False  # 暂不修改梯度设置
             self.skip_gating = False
         else:
             # 关闭 UDT：退化为无损的 RDT (Linear 或 ResidualBlock)

@@ -99,7 +99,7 @@ class TrainConfig:
 
     test_attack_mode: str = ""   # 留空表示跟随 corruption_mode，设为 "nsaop" 启用新基准
 
-    beta: float = 0.000001   # KL散度正则化系数
+    beta: float = 5e-7  # KL散度正则化系数
     use_udt: bool = True
 
     # ========== 新增：RDT 训练策略参数 ==========
@@ -111,11 +111,11 @@ class TrainConfig:
     correct_start: int = 50                 # 从第几个 epoch 开始校正
     correct_thershold: Tuple[float] = None  # 异常值校正阈值 (act, rew)
     # ===========================================
-    dapa_threshold: float = 30.0  # 数据量感知退火中心点
+    dapa_threshold: float = 45.0  # 数据量感知退火中心点
     dapa_steepness: float = 0.5  # 过渡平滑度
     rew_error_tau: float = 1.0  # 奖励误差温度
     rew_error_ema_decay: float = 0.9  # EMA 衰减系数
-    kl_warmup_steps: int = 20000  # KL 预热步数
+    kl_warmup_steps: int = 50000  # KL 预热步数
 
     def __post_init__(self):
         # train
@@ -493,8 +493,7 @@ def train(config: TrainConfig, logger: Logger):
                     kl_state_mean = kl_act_mean = kl_ret_mean = torch.tensor(0.0, device=config.device)
 
                 kl_total = (kl_state_mean + kl_act_mean + gamma_rew * kl_ret_mean) / 3.0
-
-                kl_warmup_steps = getattr(config, 'kl_warmup_steps', 20000)
+                kl_warmup_steps = getattr(config, 'kl_warmup_steps', 50000)
                 current_beta = config.beta * min(1.0, total_updates / kl_warmup_steps)
 
             # ---------- 总损失 ----------
@@ -520,6 +519,7 @@ def train(config: TrainConfig, logger: Logger):
                 "ema_rew_error": config.ema_rew_error,
                 "policy_loss": loss_total.item(),
                 "learning_rate": scheduler.get_last_lr()[0],
+                "lambda": torch.exp(model.log_lambda).item() if config.use_udt else 1.0,
             })
             scheduler.step()
             total_updates += 1
