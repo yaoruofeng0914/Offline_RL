@@ -223,7 +223,6 @@ class TransformerBlock(nn.Module):
             scale = d_k ** -0.5
             attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale
 
-            # 不确定性门控 ( 修正版：使用加法惩罚)
             temperature = 1.0 + torch.exp(log_lambda) * var_seq
             temperature = temperature.unsqueeze(1).unsqueeze(2)
             attn_weights = attn_weights / temperature

@@ -503,6 +503,7 @@ class DecisionTransformer(nn.Module):
             act_var = act_logvar.exp().mean(dim=-1)
             ret_var = ret_logvar.exp().mean(dim=-1)
 
+            # ================= 新增：重参数化采样 =================
             if self.embed_order == "rsa":
                 var_seq = torch.stack([ret_var, state_var, act_var], dim=1)
                 sequence = torch.stack([ret_mu, state_mu, act_mu], dim=1)

@@ -439,20 +439,31 @@ def train(config: TrainConfig, logger: Logger):
             predicted_rewards = predicted[1]  # 奖励预测，WMSE 和异常值校正需要
             # UDT 特有的嵌入参数
             udt_info = predicted[2]
+            # 提前提取贝叶斯方差，用于不确定性加权
+            act_logvar_for_loss = None
+            ret_logvar_for_loss = None
+            if config.use_udt and udt_info is not None:
+                _, _, _, act_logvar, _, ret_logvar = udt_info
+                act_logvar_for_loss = act_logvar
+                ret_logvar_for_loss = ret_logvar
 
             # ========== RDT 风格的加权均方误差 (WMSE) ==========
             # ========== RDT 风格的加权均方误差 (WMSE) ==========
-            def wmse_loss(pred, target, mask, coef):
-                """带掩码的加权均方误差"""
+            def wmse_loss(pred, target, mask, coef, logvar_for_loss=None):
                 with torch.no_grad():
                     diff = torch.square(pred.detach() - target.detach()).mean(-1, keepdim=True)
                     weight = torch.exp(-coef * diff)
+                    # 新增：不确定性加权，方差越大贡献越小
+                    if logvar_for_loss is not None:
+                        var = logvar_for_loss.exp().mean(dim=-1, keepdim=True)  # [B, L, 1]
+                        uncertainty_weight = torch.exp(-var)  # 方差大→权重小
+                        weight = weight * uncertainty_weight
                 loss = F.mse_loss(pred, target.detach(), reduction="none")
                 loss = (loss * weight) * mask.unsqueeze(-1)
                 return loss.mean()
 
-            loss_action = wmse_loss(predicted_actions, actions, mask, config.wmse_coef[0])
-            loss_reward = wmse_loss(predicted_rewards, rewards, mask, config.wmse_coef[1])
+            loss_action = wmse_loss(predicted_actions, actions, mask, config.wmse_coef[0], act_logvar_for_loss)
+            loss_reward = wmse_loss(predicted_rewards, rewards, mask, config.wmse_coef[1], ret_logvar_for_loss)
 
             # ---------- 奖励误差 EMA 更新 ----------
             with torch.no_grad():
@@ -474,6 +485,11 @@ def train(config: TrainConfig, logger: Logger):
             current_beta = 0.0
             if config.use_udt and udt_info is not None:
                 state_mu, state_logvar, act_mu, act_logvar, ret_mu, ret_logvar = udt_info
+                MAX_MU = 5.0
+                state_mu = torch.clamp(state_mu, -MAX_MU, MAX_MU)
+                act_mu = torch.clamp(act_mu, -MAX_MU, MAX_MU)
+                ret_mu = torch.clamp(ret_mu, -MAX_MU, MAX_MU)
+
                 MAX_LOGVAR = 5.0
                 MIN_LOGVAR = -10.0
                 state_logvar = torch.clamp(state_logvar, MIN_LOGVAR, MAX_LOGVAR)
