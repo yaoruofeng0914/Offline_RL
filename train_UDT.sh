@@ -7,18 +7,18 @@ ENVS=(
 #"kitchen-complete-v0"
 #"kitchen-mixed-v0"
 #"kitchen-partial-v0"
-"relocate-expert-v0"
-#"walker2d-medium-replay-v2"
+#"relocate-expert-v0"
+"walker2d-medium-replay-v2"
 )
 MODES=(
-"random"
-#"adversarial"
+#"random"
+"adversarial"
 )
 
 TAGS=(
-"obs"
+#"obs"
 #"act"
-#"rew"
+"rew"
 )
 
 SEEDS=(

@@ -188,9 +188,8 @@ class BayesianEmbedding(nn.Module):
     def forward(self, x):
         mu = self.mean_net(x)
         logvar = self.logvar_net(x)
-        logvar = torch.clamp(logvar, -10, 5)   # 防止数值爆炸
+        logvar = torch.clamp(logvar, -10, 5)
         return mu, logvar
-
 
 @torch.no_grad()
 def eval_rollout(
@@ -339,7 +338,6 @@ def eval_fn(config, env, model, eval_attacker=None):
                 device=config.device,
                 use_stochastic=use_stochastic,
                 config=config,
-                alpha=config.alpha,
             )
             eval_returns.append(eval_return / config.reward_scale)
 
@@ -397,7 +395,7 @@ class DecisionTransformer(nn.Module):
             self.action_emb = BayesianEmbedding(action_dim, embedding_dim)
             self.return_emb = BayesianEmbedding(1, embedding_dim)
             self.log_lambda = nn.Parameter(torch.tensor(0.0))  # 初始化为 0，即 λ=1
-            # self.log_lambda.requires_grad = False  # 暂不修改梯度设置
+            # self.log_lambda.requires_grad = False
             self.skip_gating = False
         else:
             # 关闭 UDT：退化为无损的 RDT (Linear 或 ResidualBlock)
@@ -549,7 +547,6 @@ class DecisionTransformer(nn.Module):
             pass_var = var_seq if (self.use_udt and not self.skip_gating) else None
             pass_lambda = self.log_lambda if (self.use_udt and not self.skip_gating) else None
             out = block(out, padding_mask=padding_mask, var_seq=pass_var, log_lambda=pass_lambda)
-            # ==================================
 
         out = self.out_norm(out)
 
