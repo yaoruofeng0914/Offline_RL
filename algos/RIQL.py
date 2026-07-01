@@ -1126,6 +1126,9 @@ def test(config: TrainConfig, logger: Logger):
         if f.startswith("policy") and f.endswith(".pth")
     ]
     model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
+    open(os.path.join(logger.get_dir(), "eval_scores.txt"), "w").close()
+    best_score = -float('inf')
+    best_epoch = 0
     for i, model_epoch in enumerate(model_epoches):
         epoch = int(model_epoch.split(".")[0].split("_")[1])
         print(f"eval epoch: {epoch}")
@@ -1153,6 +1156,11 @@ def test(config: TrainConfig, logger: Logger):
         logger.dump(0)
 
         score = eval_log[f"eval/normalized_score_mean"]
+        if score > best_score:
+            best_score = score
+            best_epoch = epoch
+        with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
+            f.write(f"{score:.4f}_{epoch}\n")
         eval_atta_tag = "attack" if config.eval_attack else "clean"
         # train_time = config.checkpoint_dir.split("_")[-2]
         log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(logger.get_dir()))),
@@ -1160,7 +1168,9 @@ def test(config: TrainConfig, logger: Logger):
         title = f"{config.group}_{config.env}_{config.corruption_mode}_{config.corruption_tag}_{eval_atta_tag}_{config.seed}"
         with open(log_path, "a") as f:
             f.write(f"{title}: {score:.4f}\n")
-
+    if best_score > -float('inf'):
+        with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
+            f.write(f"{best_score:.4f}_{best_epoch}")
 @pyrallis.wrap()
 def main(config: TrainConfig):
     logger = init_logger(config)

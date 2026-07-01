@@ -120,7 +120,7 @@ for env_dir in "$BASE_DIR"/*; do
         RUN_DIR=$(grep "Logging to" "$LOG_FILE" | awk '{print $3}')
         if [ -n "$RUN_DIR" ] && [ -f "${RUN_DIR}/best_score.txt" ]; then
             SCORE_RAW=$(cat "${RUN_DIR}/best_score.txt")
-            BEST_SCORE=$(echo "$SCORE_RAW" | cut -d'_' -f1)
+            BEST_SCORE=$(awk -F'_' '{print $1}' "${RUN_DIR}/eval_scores.txt" | sort -n | tail -n1)
         fi
 
         # 写入 CSV

@@ -576,6 +576,7 @@ def test(config: TrainConfig, logger: Logger):
     model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
     best_score = -float('inf')
     best_epoch = 0
+    open(os.path.join(logger.get_dir(), "eval_scores.txt"), "w").close()
     for i, model_epoch in enumerate(model_epoches):
         epoch = int(model_epoch.split(".")[0].split("_")[1])
         print(f"eval epoch: {epoch}")
@@ -602,6 +603,8 @@ def test(config: TrainConfig, logger: Logger):
         logger.dump(0)
 
         score = eval_log[f"eval/normalized_score_mean"]
+        with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
+            f.write(f"{score:.4f}_{epoch}\n")
         if score > best_score:
             best_score = score
             best_epoch = epoch
