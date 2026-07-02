@@ -277,8 +277,11 @@ def train(config: TrainConfig, logger: Logger):
     #     wandb.log({"epoch": 0, **eval_log})
 
     total_updates = 0
-    best_score = -np.inf
-    best_score_50 = -np.inf
+    best_score_att = -np.inf
+    best_score_raw = 0.0
+    best_epoch = 0
+    best_score_50_att = -np.inf
+    best_score_50_raw = 0.0
     # trainloader_iter = iter(trainloader)
     for epoch in trange(1, config.num_epochs + 1, desc="Training"):
         time_start = time.time()
@@ -342,23 +345,34 @@ def train(config: TrainConfig, logger: Logger):
                 wandb.log({"epoch": epoch, **update_log})
                 wandb.log({"epoch": epoch, **eval_log})
 
-            now_score = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean"], eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean"])
+            score_att = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean_att"],
+                            eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean_att"])
+            score_raw = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean_raw"],
+                            eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean_raw"])
             with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
-                    f.write(f"{now_score:.4f}_{epoch}\n")
-            if config.save_model and now_score > best_score:
-                best_score = now_score
+                f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_epoch{epoch}\n")
+            if score_att > best_score_att:
+                best_score_att = score_att
+                best_score_raw = score_raw
+                best_epoch = epoch
                 with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
-                        f.write(f"{best_score:.4f}_{epoch}")
+                    f.write(f"{best_score_att:.4f}_{best_score_raw:.4f}_{best_epoch}")
+                if config.save_model:
+                    torch.save(
+                        model.state_dict(),
+                        os.path.join(logger.get_dir(), f"best_policy.pth"),
+                    )
                 if config.save_model:
                     torch.save(
                         model.state_dict(),
                         os.path.join(logger.get_dir(), f"best_policy.pth"),
                     )
             if epoch > config.num_epochs - 50:
-                if now_score > best_score_50:
-                    best_score_50 = now_score
+                if score_att > best_score_50_att:
+                    best_score_50_att = score_att
+                    best_score_50_raw = score_raw
                     with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
-                            f.write(f"{best_score_50:.4f}_{epoch}")
+                        f.write(f"{best_score_50_att:.4f}_{best_score_50_raw:.4f}_{epoch}")
                     if config.save_model:
                         torch.save(
                             model.state_dict(),
@@ -366,12 +380,7 @@ def train(config: TrainConfig, logger: Logger):
                         )
             if epoch == config.num_epochs:
                 with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
-                        f.write(f"{now_score:.4f}_{epoch}")
-                if config.save_model:
-                    torch.save(
-                        model.state_dict(),
-                        os.path.join(logger.get_dir(), f"final_policy.pth"),
-                    )
+                    f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_{epoch}")
 
 
 def test(config: TrainConfig, logger: Logger):
@@ -422,8 +431,10 @@ def test(config: TrainConfig, logger: Logger):
     ]
     model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
 
-    best_score = -np.inf
-    best_score_50 = -np.inf
+    best_score_att = -np.inf
+    best_score_raw_at_best = 0.0
+    best_score_50_att = -np.inf
+    best_epoch = 0
     for i, model_epoch in enumerate(model_epoches):
         epoch = int(model_epoch.split(".")[0].split("_")[1])
         print(f"eval epoch: {epoch}")
@@ -441,25 +452,30 @@ def test(config: TrainConfig, logger: Logger):
             logger.record(k, v)
         logger.dump(0)
 
-        now_score = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean"], eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean"])
+        score_att = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean_att"],
+                        eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean_att"])
+        score_raw = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean_raw"],
+                        eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean_raw"])
         if i == 0:
             with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "w") as f:
-                f.write(f"{now_score:.4f}_{epoch}\n")
+                f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_epoch{epoch}\n")
         if i > 0:
             with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
-                f.write(f"{now_score:.4f}_{epoch}\n")
-        if now_score > best_score:
-            best_score = now_score
+                f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_epoch{epoch}\n")
+        if score_att > best_score_att:
+            best_score_att = score_att
+            best_score_raw_at_best = score_raw
+            best_epoch = epoch
             with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
-                f.write(f"{best_score:.4f}_{epoch}")
+                f.write(f"{best_score_att:.4f}_{best_score_raw_at_best:.4f}_{best_epoch}")
         if epoch > config.num_epochs - 50:
-            if now_score > best_score_50:
-                best_score_50 = now_score
+            if score_att > best_score_50_att:
+                best_score_50_att = score_att
                 with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
-                    f.write(f"{best_score_50:.4f}_{epoch}")
+                    f.write(f"{best_score_50_att:.4f}_{epoch}")
         if epoch == config.num_epochs:
             with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
-                f.write(f"{now_score:.4f}_{epoch}")
+                f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_{epoch}")
 
 @pyrallis.wrap()
 def main(config: TrainConfig):

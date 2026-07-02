@@ -582,7 +582,7 @@ def eval_rollout(
         device: str = "cpu",
         nsaop_attacker = None,
 
-) -> Tuple[float, float]:
+) -> Tuple[float, float, float]:
     # parallel evaluation with vectorized environment
     action_range = [
         float(env.action_space.low.min()) + 1e-6,
@@ -591,7 +591,8 @@ def eval_rollout(
     model.eval()
 
     episodes = 1
-    reward, returns = np.zeros(episodes), np.zeros(episodes)
+    returns_att = np.zeros(episodes)
+    returns_raw = np.zeros(episodes)
     done_flags = np.zeros(episodes, dtype=np.bool8)
 
     state_dim = model.state_dim
@@ -616,7 +617,7 @@ def eval_rollout(
 
     while not done_flags.all():
         states[:, timestep] = torch.from_numpy(state).to(device)
-        rewards_to_go[:, timestep] = reward_to_go - torch.from_numpy(returns).to(device).unsqueeze(-1)
+        rewards_to_go[:, timestep] = reward_to_go - torch.from_numpy(returns_att).to(device).unsqueeze(-1)
         dropsteps[timestep] = dropstep
         obs_index = torch.arange(max(0, timestep - context_len + 1), timestep + 1)
         _, action_preds, _ = model.forward(states[:, obs_index],
@@ -636,25 +637,33 @@ def eval_rollout(
         action = torch.as_tensor(action)
         actions[:, timestep] = action
 
-        state, reward, dones, info = env.step(action[0].cpu().numpy())
-        returns += reward * ~done_flags
+        state, reward_raw, dones, info = env.step(action[0].cpu().numpy())
+        # 奖励攻击：模型使用攻击后的奖励，但原始奖励保留
+        if nsaop_attacker and nsaop_attacker.get('rew'):
+            reward_att = nsaop_attacker['rew'].attack_rew(reward_raw)
+        elif eval_attacker is not None and eval_attack_tag == "rew":
+            attack_flag = np.random.rand()
+            if attack_flag < eval_corruption_rate:
+                reward_att = eval_attacker.attack_rew(reward_raw)
+            else:
+                reward_att = reward_raw
+        else:
+            reward_att = reward_raw
+
+        # 累加两种回报
+        returns_att += reward_att * ~done_flags
+        returns_raw += reward_raw * ~done_flags
         if nsaop_attacker and nsaop_attacker.get('obs'):
             state = nsaop_attacker['obs'].attack_obs(state)
         elif eval_attacker is not None and eval_attack_tag == "obs":
             attack_flag = np.random.rand()
             if attack_flag < eval_corruption_rate:
                 state = eval_attacker.attack_obs(state)
-        if nsaop_attacker and nsaop_attacker.get('rew'):
-            reward = nsaop_attacker['rew'].attack_rew(reward)
-        elif eval_attacker is not None and eval_attack_tag == "rew":
-            attack_flag = np.random.rand()
-            if attack_flag < eval_corruption_rate:
-                reward = eval_attacker.attack_rew(reward)
         dropstep = dropsteps[timestep].item() + 1 if info.get('dropped', False) else 0
         done_flags = np.bitwise_or(done_flags, dones)
         timestep += 1
 
-    return returns, timestep
+    return returns_att, returns_raw, timestep
 
 
 def eval_fn(config, env, model, eval_attacker=None):
@@ -700,9 +709,10 @@ def eval_fn(config, env, model, eval_attacker=None):
         eval_attack_tag = "rew"
     eval_log = {}
     for target_return in config.target_returns:
-        eval_returns = []
+        eval_returns_att = []
+        eval_returns_raw = []
         for _ in trange(config.n_episodes, desc="Evaluation", leave=False):
-            eval_return, eval_len = eval_rollout(
+            eval_return_att, eval_return_raw, eval_len = eval_rollout(
                 model=model,
                 env=env,
                 target_return=target_return,
@@ -712,16 +722,22 @@ def eval_fn(config, env, model, eval_attacker=None):
                 device=config.device,
                 nsaop_attacker=nsaop_attacker,
             )
-            # unscale for logging & correct normalized score computation
-            eval_returns.append(eval_return)
+            eval_returns_att.append(eval_return_att)
+            eval_returns_raw.append(eval_return_raw)
 
-        eval_returns = np.array(eval_returns)
-        normalized_score = env.get_normalized_score(eval_returns) * 100
+        eval_returns_att = np.array(eval_returns_att)
+        eval_returns_raw = np.array(eval_returns_raw)
+        normalized_score_att = env.get_normalized_score(eval_returns_att) * 100
+        normalized_score_raw = env.get_normalized_score(eval_returns_raw) * 100
         eval_log.update({
-            f"eval/{target_return}_reward_mean": np.mean(eval_returns),
-            f"eval/{target_return}_reward_std": np.std(eval_returns),
-            f"eval/{target_return}_normalized_score_mean": np.mean(normalized_score),
-            f"eval/{target_return}_normalized_score_std": np.std(normalized_score),
+            f"eval/{target_return}_reward_mean_att": np.mean(eval_returns_att),
+            f"eval/{target_return}_reward_std_att": np.std(eval_returns_att),
+            f"eval/{target_return}_normalized_score_mean_att": np.mean(normalized_score_att),
+            f"eval/{target_return}_normalized_score_std_att": np.std(normalized_score_att),
+            f"eval/{target_return}_reward_mean_raw": np.mean(eval_returns_raw),
+            f"eval/{target_return}_reward_std_raw": np.std(eval_returns_raw),
+            f"eval/{target_return}_normalized_score_mean_raw": np.mean(normalized_score_raw),
+            f"eval/{target_return}_normalized_score_std_raw": np.std(normalized_score_raw),
         })
     return eval_log
 
@@ -729,6 +745,11 @@ def eval_fn(config, env, model, eval_attacker=None):
 # @pyrallis.wrap()
 def train(config: TrainConfig, logger: Logger):
     # Set seeds
+    best_score_att = -np.inf
+    best_score_raw = 0.0
+    best_epoch = 0
+    best_score_50_att = -np.inf
+    best_score_50_raw = 0.0
     func.set_seed(config.seed)
     if config.use_wandb:
         func.wandb_init(config)
@@ -817,8 +838,6 @@ def train(config: TrainConfig, logger: Logger):
     # model.train()
 
     total_updates = 0
-    best_score = -np.inf
-    best_score_50 = -np.inf
     # trainloader_iter = iter(trainloader)
     for epoch in trange(1, config.num_epochs + 1, desc="Training"):
         time_start = time.time()
@@ -878,32 +897,33 @@ def train(config: TrainConfig, logger: Logger):
                 wandb.log({"epoch": epoch, **update_log})
                 wandb.log({"epoch": epoch, **eval_log})
 
-            now_score = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean"],
-                            eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean"])
+            score_att = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean_att"],
+                            eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean_att"])
+            score_raw = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean_raw"],
+                            eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean_raw"])
             with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
-                f.write(f"{now_score:.4f}_{epoch}\n")
-            if now_score > best_score:
-                best_score = now_score
+                f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_epoch{epoch}\n")
+            if score_att > best_score_att:
+                best_score_att = score_att
+                best_score_raw = score_raw
+                best_epoch = epoch
                 with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
-                    f.write(f"{best_score:.4f}_{epoch}")
+                    f.write(f"{best_score_att:.4f}_{best_score_raw:.4f}_{best_epoch}")
                 if config.save_model:
-                    torch.save(
-                        model.state_dict(),
-                        os.path.join(logger.get_dir(), f"best_policy.pth"),
-                    )
+                    torch.save(model.state_dict(), os.path.join(logger.get_dir(), f"best_policy.pth"))
+
+            # 后 50 轮最佳
             if epoch > config.num_epochs - 50:
-                if now_score > best_score_50:
-                    best_score_50 = now_score
+                if score_att > best_score_50_att:
+                    best_score_50_att = score_att
+                    best_score_50_raw = score_raw
                     with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
-                        f.write(f"{best_score_50:.4f}_{epoch}")
-                    if config.save_model:
-                        torch.save(
-                            model.state_dict(),
-                            os.path.join(logger.get_dir(), f"best_policy_50.pth"),
-                        )
+                        f.write(f"{best_score_50_att:.4f}_{best_score_50_raw:.4f}_{epoch}")
+
+            # 最终轮
             if epoch == config.num_epochs:
                 with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
-                    f.write(f"{now_score:.4f}_{epoch}")
+                    f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_{epoch}")
                 if config.save_model:
                     torch.save(
                         model.state_dict(),
@@ -913,6 +933,10 @@ def train(config: TrainConfig, logger: Logger):
 
 def test(config: TrainConfig, logger: Logger):
     # Set seeds
+    best_score_att = -np.inf
+    best_score_raw_at_best = 0.0
+    best_score_50_att = -np.inf
+    best_epoch = 0
     func.set_seed(config.seed)
 
     env = gym.make(config.env)
@@ -959,9 +983,6 @@ def test(config: TrainConfig, logger: Logger):
         if f.startswith("policy") and f.endswith(".pth")
     ]
     model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
-
-    best_score = -np.inf
-    best_score_50 = -np.inf
     for i, model_epoch in enumerate(model_epoches):
         epoch = int(model_epoch.split(".")[0].split("_")[1])
         print(f"eval epoch: {epoch}")
@@ -993,27 +1014,30 @@ def test(config: TrainConfig, logger: Logger):
             logger.record(k, v)
         logger.dump(0)
 
-        now_score = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean"],
-                        eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean"])
+        score_att = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean_att"],
+                        eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean_att"])
+        score_raw = max(eval_log[f"eval/{config.target_returns[0]}_normalized_score_mean_raw"],
+                        eval_log[f"eval/{config.target_returns[1]}_normalized_score_mean_raw"])
         if i == 0:
             with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "w") as f:
-                f.write(f"{now_score:.4f}_{epoch}\n")
+                f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_epoch{epoch}\n")
         if i > 0:
             with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
-                f.write(f"{now_score:.4f}_{epoch}\n")
-        if now_score > best_score:
-            best_score = now_score
+                f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_epoch{epoch}\n")
+        if score_att > best_score_att:
+            best_score_att = score_att
+            best_score_raw_at_best = score_raw
+            best_epoch = epoch
             with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
-                f.write(f"{best_score:.4f}_{epoch}")
+                f.write(f"{best_score_att:.4f}_{best_score_raw_at_best:.4f}_{best_epoch}")
         if epoch > config.num_epochs - 50:
-            if now_score > best_score_50:
-                best_score_50 = now_score
+            if score_att > best_score_50_att:
+                best_score_50_att = score_att
                 with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
-                    f.write(f"{best_score_50:.4f}_{epoch}")
+                    f.write(f"{best_score_50_att:.4f}_{epoch}")
         if epoch == config.num_epochs:
             with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
-                f.write(f"{now_score:.4f}_{epoch}")
-
+                f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_{epoch}")
 
 @pyrallis.wrap()
 def main(config: TrainConfig):

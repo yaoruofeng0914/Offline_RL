@@ -242,7 +242,8 @@ def eval_rollout(
     states[:, 0] = torch.as_tensor(obs, device=device)
     returns[:, 0] = torch.as_tensor(target_return, device=device)
 
-    episode_return, episode_len = 0.0, 0.0
+    episode_return_att, episode_return_raw = 0.0, 0.0
+    episode_len = 0
 
     for step in range(model.episode_len):
         predicted = model(
@@ -266,10 +267,8 @@ def eval_rollout(
                 predicted_action = eval_attacker.attack_act(predicted_action)
 
         predicted_action = np.clip(predicted_action, *action_range)
-        next_state, reward, done, info = env.step(predicted_action)
-        episode_return += reward
+        next_state, reward_raw, done, info = env.step(predicted_action)
         episode_len += 1
-
         if nsaop_obs_attacker is not None:
             next_state = nsaop_obs_attacker.attack_obs(next_state)
         elif eval_attacker is not None and eval_attack_tag == "obs":
@@ -278,19 +277,25 @@ def eval_rollout(
                 next_state = eval_attacker.attack_obs(next_state)
 
         if nsaop_rew_attacker is not None:
-            reward = nsaop_rew_attacker.attack_rew(reward)
+            reward_att = nsaop_rew_attacker.attack_rew(reward_raw)
         elif eval_attacker is not None and eval_attack_tag == "rew":
             attack_flag = np.random.rand()
             if attack_flag < eval_corruption_rate:
-                reward = eval_attacker.attack_rew(reward)
+                reward_att = eval_attacker.attack_rew(reward_raw)
+            else:
+                reward_att = reward_raw
+        else:
+            reward_att = reward_raw
+
+        episode_return_att += reward_att
+        episode_return_raw += reward_raw
 
         actions[:, step] = torch.as_tensor(predicted_action)
         states[:, step + 1] = torch.as_tensor(next_state)
-        returns[:, step + 1] = torch.as_tensor(returns[:, step] - reward)
-
+        returns[:, step + 1] = torch.as_tensor(returns[:, step] - reward_att)
         if done:
             break
-    return episode_return, episode_len
+    return episode_return_att, episode_return_raw, episode_len
 
 
 def eval_fn(config, env, model, eval_attacker=None):
@@ -298,9 +303,10 @@ def eval_fn(config, env, model, eval_attacker=None):
     eval_attack_tag = config.corruption_tag
     use_stochastic = config.use_stochastic if hasattr(config, 'use_stochastic') else False
     for target_return in config.target_returns:
-        eval_returns = []
+        eval_returns_att = []
+        eval_returns_raw = []
         for _ in trange(config.n_episodes, desc="Evaluation", leave=False):
-            eval_return, eval_len = eval_rollout(
+            eval_return_att, eval_return_raw, eval_len = eval_rollout(
                 model=model,
                 env=env,
                 target_return=target_return * config.reward_scale,
@@ -309,17 +315,24 @@ def eval_fn(config, env, model, eval_attacker=None):
                 eval_attack_tag=eval_attack_tag,
                 device=config.device,
                 use_stochastic=use_stochastic,
-                config=config,  # 确保传入 config 以支持 NSAOP
+                config=config,
             )
-            eval_returns.append(eval_return / config.reward_scale)
+            eval_returns_att.append(eval_return_att / config.reward_scale)
+            eval_returns_raw.append(eval_return_raw / config.reward_scale)
 
-        eval_returns = np.array(eval_returns)
-        normalized_score = env.get_normalized_score(eval_returns) * 100
+        eval_returns_att = np.array(eval_returns_att)
+        eval_returns_raw = np.array(eval_returns_raw)
+        normalized_score_att = env.get_normalized_score(eval_returns_att) * 100
+        normalized_score_raw = env.get_normalized_score(eval_returns_raw) * 100
         eval_log.update({
-            f"eval/{target_return}_reward_mean": np.mean(eval_returns),
-            f"eval/{target_return}_reward_std": np.std(eval_returns),
-            f"eval/{target_return}_normalized_score_mean": np.mean(normalized_score),
-            f"eval/{target_return}_normalized_score_std": np.std(normalized_score),
+            f"eval/{target_return}_reward_mean_att": np.mean(eval_returns_att),
+            f"eval/{target_return}_reward_std_att": np.std(eval_returns_att),
+            f"eval/{target_return}_normalized_score_mean_att": np.mean(normalized_score_att),
+            f"eval/{target_return}_normalized_score_std_att": np.std(normalized_score_att),
+            f"eval/{target_return}_reward_mean_raw": np.mean(eval_returns_raw),
+            f"eval/{target_return}_reward_std_raw": np.std(eval_returns_raw),
+            f"eval/{target_return}_normalized_score_mean_raw": np.mean(normalized_score_raw),
+            f"eval/{target_return}_normalized_score_std_raw": np.std(normalized_score_raw),
         })
     return eval_log
 

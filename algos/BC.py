@@ -300,7 +300,7 @@ def eval_actor_nsaop(config, env, actor):
         float(env.action_space.high.max()) - 1e-6,
     ]
 
-        # 初始化 NSAOP 攻击器
+    # 初始化 NSAOP 攻击器（补全参数）
     nsaop_obs = nsaop_act = nsaop_rew = None
     if config.corruption_tag == "obs":
         nsaop_obs = NSAOPObsAttacker(
@@ -327,38 +327,66 @@ def eval_actor_nsaop(config, env, actor):
         )
 
     actor.eval()
-    episode_rewards = []
+    episode_rewards_att = []      # 存放攻击后的累积回报
+    episode_rewards_raw = []      # 存放原始累积回报
+
     for _ in trange(n_episodes):
         state, done = env.reset(), False
         if nsaop_obs:
             state = nsaop_obs.attack_obs(state)
-        episode_reward = 0.0
+        episode_reward_att = 0.0
+        episode_reward_raw = 0.0   # 新增
+
         while not done:
             action = actor.act(state, device)
             if nsaop_act:
                 action = nsaop_act.attack_act(action)
             action = np.clip(action, *action_range)
-            next_state, reward, done, _ = env.step(action)
+
+            next_state, reward_raw, done, _ = env.step(action)  # 保存原始奖励
+
+            # 观测攻击（next_state 篡改，模型看到篡改后的 state）
             if nsaop_obs:
                 next_state = nsaop_obs.attack_obs(next_state)
+
+            # 奖励攻击：模型使用攻击后的奖励，但原始奖励保留
             if nsaop_rew:
-                reward = nsaop_rew.attack_rew(reward)
-            episode_reward += reward
+                reward_att = nsaop_rew.attack_rew(reward_raw)
+            else:
+                reward_att = reward_raw
+
+            # 累加两种回报
+            episode_reward_att += reward_att
+            episode_reward_raw += reward_raw
+
             state = next_state
-        episode_rewards.append(episode_reward)
+
+        episode_rewards_att.append(episode_reward_att)
+        episode_rewards_raw.append(episode_reward_raw)
 
     actor.train()
-    eval_returns = np.array(episode_rewards)
-    normalized_score = env.get_normalized_score(eval_returns) * 100.0
+    eval_returns_att = np.array(episode_rewards_att)
+    eval_returns_raw = np.array(episode_rewards_raw)
+
+    # 计算归一化分数
+    normalized_score_att = env.get_normalized_score(eval_returns_att) * 100.0
+    normalized_score_raw = env.get_normalized_score(eval_returns_raw) * 100.0
+
     eval_log = {
-        "eval/reward_mean": np.mean(eval_returns),
-        "eval/reward_std": np.std(eval_returns),
-        "eval/normalized_score_mean": np.mean(normalized_score),
-        "eval/normalized_score_std": np.std(normalized_score),
+        "eval/reward_mean_att": np.mean(eval_returns_att),
+        "eval/reward_std_att": np.std(eval_returns_att),
+        "eval/normalized_score_mean_att": np.mean(normalized_score_att),
+        "eval/normalized_score_std_att": np.std(normalized_score_att),
+        "eval/reward_mean_raw": np.mean(eval_returns_raw),
+        "eval/reward_std_raw": np.std(eval_returns_raw),
+        "eval/normalized_score_mean_raw": np.mean(normalized_score_raw),
+        "eval/normalized_score_std_raw": np.std(normalized_score_raw),
     }
     return eval_log
 def train(config: TrainConfig, logger: Logger):
     # Set seeds
+    best_score_att = -np.inf
+    best_score_raw = 0.0
     func.set_seed(config.seed)
 
     if config.use_wandb:
@@ -456,9 +484,12 @@ def train(config: TrainConfig, logger: Logger):
 
     # if config.use_wandb:
     #     wandb.log({"epoch": 0, **eval_log})
-
-    best_score = -np.inf
-    best_score_50 = -np.inf
+    #
+    # best_score = -np.inf
+    # best_score_50 = -np.inf
+    best_score_raw_at_best = 0.0
+    best_score_50_att = -np.inf
+    best_score_50_raw = 0.0
     total_updates = 0.0
     for epoch in trange(1, config.num_epochs + 1, desc="Training"):
         time_start = time.time()
@@ -495,23 +526,27 @@ def train(config: TrainConfig, logger: Logger):
                 wandb.log({"epoch": epoch, **update_log})
                 wandb.log({"epoch": epoch, **eval_log})
 
-            now_score = eval_log["eval/normalized_score_mean"]
+            score_att = eval_log["eval/normalized_score_mean_att"]
+            score_raw = eval_log["eval/normalized_score_mean_raw"]
             with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
-                f.write(f"{now_score:.4f}_{epoch}\n")
-            if now_score > best_score:
-                best_score = now_score
+                f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_epoch{epoch}\n")
+            if score_att > best_score_att:
+                best_score_att = score_att
+                best_score_raw_at_best = score_raw
+                best_epoch = epoch
                 with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
-                    f.write(f"{best_score:.4f}_{epoch}")
+                    f.write(f"{best_score_att:.4f}_{best_score_raw_at_best:.4f}_{best_epoch}")
                 if config.save_model:
                     torch.save(
                         trainer.state_dict(),
                         os.path.join(logger.get_dir(), f"best_policy.pth"),
                     )
             if epoch > config.num_epochs - 50:
-                if now_score > best_score_50:
-                    best_score_50 = now_score
+                if score_att > best_score_50_att:
+                    best_score_50_att = score_att
+                    best_score_50_raw = score_raw
                     with open(os.path.join(logger.get_dir(), "best_score_50.txt"), "w") as f:
-                        f.write(f"{best_score_50:.4f}_{epoch}")
+                        f.write(f"{best_score_50_att:.4f}_{best_score_50_raw:.4f}_{epoch}")
                     if config.save_model:
                         torch.save(
                             trainer.state_dict(),
@@ -519,7 +554,7 @@ def train(config: TrainConfig, logger: Logger):
                         )
             if epoch == config.num_epochs:
                 with open(os.path.join(logger.get_dir(), "final_score.txt"), "w") as f:
-                    f.write(f"{now_score:.4f}_{epoch}")
+                    f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_{epoch}")
                 if config.save_model:
                     torch.save(
                         trainer.state_dict(),
@@ -533,7 +568,9 @@ def train(config: TrainConfig, logger: Logger):
 def test(config: TrainConfig, logger: Logger):
     # Set seeds
     func.set_seed(config.seed)
-
+    best_score_att = -np.inf
+    best_score_raw_at_best = 0.0
+    best_epoch = 0
     env = gym.make(config.env)
 
     state_dim = env.observation_space.shape[0]
@@ -574,7 +611,7 @@ def test(config: TrainConfig, logger: Logger):
         if f.startswith("policy") and f.endswith(".pth")
     ]
     model_epoches.sort(key=lambda x: int(x.split(".")[0].split("_")[1]))
-    best_score = -float('inf')
+
     best_epoch = 0
     open(os.path.join(logger.get_dir(), "eval_scores.txt"), "w").close()
     for i, model_epoch in enumerate(model_epoches):
@@ -602,11 +639,13 @@ def test(config: TrainConfig, logger: Logger):
             logger.record(k, v)
         logger.dump(0)
 
-        score = eval_log[f"eval/normalized_score_mean"]
+        score_att = eval_log["eval/normalized_score_mean_att"]
+        score_raw = eval_log["eval/normalized_score_mean_raw"]
         with open(os.path.join(logger.get_dir(), "eval_scores.txt"), "a") as f:
-            f.write(f"{score:.4f}_{epoch}\n")
-        if score > best_score:
-            best_score = score
+            f.write(f"att:{score_att:.4f}_raw:{score_raw:.4f}_epoch{epoch}\n")
+        if score_att > best_score_att:
+            best_score_att = score_att
+            best_score_raw_at_best = score_raw
             best_epoch = epoch
         eval_atta_tag = "attack" if config.eval_attack else "clean"
         # train_time = config.checkpoint_dir.split("_")[-2]
@@ -614,11 +653,10 @@ def test(config: TrainConfig, logger: Logger):
                             f"test_{config.group}_{config.env}_{config.corruption_mode}_{eval_atta_tag}_{model_epoch}_{config.test_time}.txt")
         title = f"{config.group}_{config.env}_{config.corruption_mode}_{config.corruption_tag}_{eval_atta_tag}_{config.seed}"
         with open(log_path, "a") as f:
-            f.write(f"{title}: {score:.4f}\n")
-    if best_score > -float('inf'):
+            f.write(f"{title}: att={score_att:.4f} raw={score_raw:.4f}\n")
+    if best_score_att > -np.inf:
         with open(os.path.join(logger.get_dir(), "best_score.txt"), "w") as f:
-            f.write(f"{best_score:.4f}_{best_epoch}")
-
+            f.write(f"{best_score_att:.4f}_{best_score_raw_at_best:.4f}_{best_epoch}")
 
 @pyrallis.wrap()
 def main(config: TrainConfig):
