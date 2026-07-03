@@ -116,15 +116,7 @@ for env_dir in "$BASE_DIR"/*; do
             --checkpoint_dir "$condition_dir" > "$LOG_FILE" 2>&1
 
         # 提取最高分
-        BEST_ATT="NaN"
-        BEST_RAW="NaN"
-        RUN_DIR=$(grep "Logging to" "$LOG_FILE" | awk '{print $NF}')
-        if [ -n "$RUN_DIR" ] && [ -f "${RUN_DIR}/best_score.txt" ]; then
-            BEST_LINE=$(cat "${RUN_DIR}/best_score.txt")
-            BEST_ATT=$(echo "$BEST_LINE" | cut -d'_' -f1)
-            BEST_RAW=$(echo "$BEST_LINE" | cut -d'_' -f2)
-        fi
-        echo "$env,$SEED,$ATTACK_MODE,$location,$BEST_ATT,$BEST_RAW" >> "$SUMMARY_FILE"
+
     done
 done
 
