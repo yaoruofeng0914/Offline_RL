@@ -245,8 +245,6 @@ class TrainConfig:
         self.eval_corruption_rate = 0.3
         if self.eval_attack_mode == "random" and self.corruption_tag == "rew":
             self.eval_attack_eps *= 30
-        # 在 __post_init__ 的最末尾添加：
-        self.correct_thershold = None  # 完全关闭异常值修正
         # 如果指定了 test_attack_mode，则使用指定的模式；否则跟随训练模式
         # if self.test_attack_mode:
         #     self.eval_attack_mode = self.test_attack_mode
@@ -262,7 +260,7 @@ def set_model(config: TrainConfig):
         seq_len=config.seq_len,
         episode_len=config.episode_len,
         num_layers=config.num_layers,
-        predict_reward=False,
+        predict_reward=True,
         num_heads=config.num_heads,
         attention_dropout=config.attention_dropout,
         residual_dropout=config.residual_dropout,
@@ -353,7 +351,7 @@ def train(config: TrainConfig, logger: Logger):
     # model
     model = set_model(config)
     if any(name in config.env for name in ["hopper-medium", "walker2d-medium"]):
-        model.skip_gating = False
+        model.skip_gating = True
     else:
         model.skip_gating = False
     # logger.info(f"Network: \n{str(model)}")
@@ -404,6 +402,12 @@ def train(config: TrainConfig, logger: Logger):
 
     # if config.use_wandb:
     #     wandb.log({"epoch": 0, **eval_log})
+    # 初始化异常值校正所需的统计量
+    data_dist = []
+    if config.correct_thershold is not None:
+        for thershold in config.correct_thershold:
+            data_dist.append(RunningMeanStd(thershold=thershold) if thershold > 0.0 else None)
+
     total_updates = 0
     best_score_att = -np.inf
     best_score_raw = 0.0
@@ -429,39 +433,34 @@ def train(config: TrainConfig, logger: Logger):
                 time_steps=time_steps,
                 padding_mask=padding_mask,
             )
-            predicted_actions = predicted[0] # 奖励预测，WMSE 和异常值校正需要
+            predicted_actions = predicted[0]
+            predicted_rewards = predicted[1]  # 奖励预测，WMSE 和异常值校正需要
             # UDT 特有的嵌入参数
-            udt_info = predicted[2] if len(predicted) > 2 else None
+            udt_info = predicted[2]
             # 提前提取贝叶斯方差，用于不确定性加权
             act_logvar_for_loss = None
+            ret_logvar_for_loss = None
             if config.use_udt and udt_info is not None:
-                # udt_info: (state_mu, state_logvar, act_mu, act_logvar, ret_mu, ret_logvar)
-                act_logvar = udt_info[3]  # 第4个元素是 act_logvar
+                _, _, _, act_logvar, _, ret_logvar = udt_info
                 act_logvar_for_loss = act_logvar
+                ret_logvar_for_loss = ret_logvar
 
-            def wmse_loss(pred, target, mask, coef, logvar_for_loss=None, log_lambda=None):
-                # 不再使用 WMSE 的误差权重，只依赖不确定性权重
-                if logvar_for_loss is not None:
-                    var = logvar_for_loss.exp().mean(dim=-1, keepdim=True)  # 方差（标量）
-                    if log_lambda is not None:
-                        lam = torch.exp(log_lambda)  # 有梯度
-                    else:
-                        lam = 2.0
-                    weight = torch.exp(-lam * var)  # 不确定性权重，有梯度
-                    weight = torch.clamp(weight, min=0.05, max=1.0)  # 防止归零
-                else:
-                    weight = torch.ones_like(pred.mean(dim=-1, keepdim=True))  # 无方差信息时全权重
-
+            def wmse_loss(pred, target, mask, coef, logvar_for_loss=None):
+                with torch.no_grad():
+                    diff = torch.square(pred.detach() - target.detach()).mean(-1, keepdim=True)
+                    weight = torch.exp(-coef * diff)
+                    if logvar_for_loss is not None:
+                        var = logvar_for_loss.exp().mean(dim=-1, keepdim=True)
+                        uncertainty_weight = torch.exp(-2.0*var)
+                        weight = weight * uncertainty_weight
                 loss = F.mse_loss(pred, target.detach(), reduction="none")
                 loss = (loss * weight) * mask.unsqueeze(-1)
                 return loss.mean()
 
+            loss_action = wmse_loss(predicted_actions, actions, mask, config.wmse_coef[0], act_logvar_for_loss)
+            loss_reward = wmse_loss(predicted_rewards, rewards, mask, config.wmse_coef[1], ret_logvar_for_loss)
             # ---------- 总损失 ----------
-            loss_total = wmse_loss(
-                predicted_actions, actions, mask, config.wmse_coef[0],
-                act_logvar_for_loss,
-                model.log_lambda if config.use_udt else None  # 传入可学习参数
-            )
+            loss_total = loss_action + config.reward_coef * loss_reward
             optim.zero_grad()
             loss_total.backward()
 
@@ -472,7 +471,8 @@ def train(config: TrainConfig, logger: Logger):
 
             # 记录日志
             log_dict.update({
-                "loss_action": loss_total.item(),
+                "loss_action": loss_action.item(),
+                "loss_reward": loss_reward.item(),
                 "policy_loss": loss_total.item(),
                 "learning_rate": scheduler.get_last_lr()[0],
                 "lambda": torch.exp(model.log_lambda).item() if config.use_udt else 1.0,
@@ -481,24 +481,24 @@ def train(config: TrainConfig, logger: Logger):
             total_updates += 1
 
             # ========== 新增：异常值校正 ==========
-            # correct_dict = {}
-            # if config.correct_thershold is not None:
-            #     # 每隔 correct_freq 步且在 correct_start 之后才执行
-            #     correct = epoch > config.correct_start and step % config.correct_freq == 0
-            #     data_info = {
-            #         "actions": [predicted_actions, actions],
-            #         "rewards": [predicted_rewards, rewards],
-            #         "mask": mask,
-            #         "attack_mask": attack_mask,
-            #         "traj_indexs": traj_indexs,
-            #         "time_steps": time_steps,
-            #     }
-            #     correct_info, correct_dict = correct_outliers(config, data_info, data_dist, correct=correct)
-            #     if correct:
-            #         for name, info in correct_info.items():
-            #             dataset.correct(info["traj_indexs"], info["time_steps"], info["correct_data"], name)
-            #         if config.correct_thershold is not None and config.correct_thershold[1] > 0.0:
-            #             config.recalculate_return = True
+            correct_dict = {}
+            if config.correct_thershold is not None:
+                # 每隔 correct_freq 步且在 correct_start 之后才执行
+                correct = epoch > config.correct_start and step % config.correct_freq == 0
+                data_info = {
+                    "actions": [predicted_actions, actions],
+                    "rewards": [predicted_rewards, rewards],
+                    "mask": mask,
+                    "attack_mask": attack_mask,
+                    "traj_indexs": traj_indexs,
+                    "time_steps": time_steps,
+                }
+                correct_info, correct_dict = correct_outliers(config, data_info, data_dist, correct=correct)
+                if correct:
+                    for name, info in correct_info.items():
+                        dataset.correct(info["traj_indexs"], info["time_steps"], info["correct_data"], name)
+                    if config.correct_thershold is not None and config.correct_thershold[1] > 0.0:
+                        config.recalculate_return = True
             # ====================================
         time_end = time.time()
         epoch_time = time_end - time_start
@@ -635,7 +635,7 @@ def test(config: TrainConfig, logger: Logger):
         model.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch)), strict=False)
         model.eval()
         if any(name in config.env for name in ["hopper-medium", "walker2d-medium"]):
-            model.skip_gating = False
+            model.skip_gating = True
         else:
             model.skip_gating = False
         # logger.info(f"Network: \n{str(model)}")

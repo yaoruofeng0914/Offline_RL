@@ -3,7 +3,7 @@ export PYTHONPATH=$PYTHONPATH:.
 export D4RL_SUPPRESS_IMPORT_ERROR=1
 BASE_DIR=~/Offline_RL/checkpoint4baseline/DT
 LOG_DIR="eval_logs"
-SUMMARY_FILE="DT_Summary_Scores.csv"
+SUMMARY_FILE="DT_Summary_Scores.csv"   # 汇总文件
 
 mkdir -p "$LOG_DIR"
 
@@ -103,7 +103,7 @@ for env_dir in "$BASE_DIR"/*; do
             "$PERCENT" "$CURRENT_TASK" "$TOTAL_TASKS" \
             "$env" "$ATTACK_MODE" "$location" "$SEED"
 
-        # 执行评估（启用 NSAOP 攻击）
+        # 执行评估 (注意：test_attack_mode nsaop 不带引号)
         python -m "algos.DT" \
             --test_time $(date +"%Y%m%d_%H%M") \
             --env "$env" \
@@ -111,12 +111,25 @@ for env_dir in "$BASE_DIR"/*; do
             --eval_attack True \
             --corruption_mode "$ATTACK_MODE" \
             --corruption_tag "$location" \
-            --test_attack_mode "nsaop" \
+            --test_attack_mode nsaop \
             --seed "$SEED" \
             --checkpoint_dir "$condition_dir" > "$LOG_FILE" 2>&1
 
-        # 提取最高分
+        # 提取最高分 (基于日志路径动态匹配)
+        DT_ATT="NaN"
+        DT_RAW="NaN"
+        RUN_DIR=$(grep "Logging to" "$LOG_FILE" | awk '{print $NF}')
 
+        if [ -n "$RUN_DIR" ] && [ -f "${RUN_DIR}/best_score.txt" ]; then
+            BEST_LINE=$(cat "${RUN_DIR}/best_score.txt")
+            DT_ATT=$(echo "$BEST_LINE" | cut -d'_' -f1)
+            DT_RAW=$(echo "$BEST_LINE" | cut -d'_' -f2)
+        else
+            # 如果代码崩溃导致未能提取到文件，终端换行打印警告，防止打乱进度条
+            echo -e "\n[Warning] 无法提取分数，请检查日志: $LOG_FILE"
+        fi
+
+        echo "$env,$SEED,$ATTACK_MODE,$location,$DT_ATT,$DT_RAW" >> "$SUMMARY_FILE"
     done
 done
 

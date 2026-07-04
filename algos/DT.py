@@ -413,13 +413,17 @@ def test(config: TrainConfig, logger: Logger):
     env.seed(config.seed)
 
     if config.eval_attack:
-        state_std, act_std, rew_std, rew_min = func.get_state_std(config)
-        eval_attacker = Evaluation_Attacker(
-            config, config.env, config.corruption_agent, config.eval_attack_eps,
-            config.state_dim, config.action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
-            MODEL_PATH[config.corruption_agent],
-        )
-        print("eval_attack: True")
+        if config.test_attack_mode == "nsaop":
+            eval_attacker = None
+            print("[Debug] eval_attack: NSAOP 模式已启用 (原有攻击器已安全禁用)")
+        else:
+            state_std, act_std, rew_std, rew_min = func.get_state_std(config)
+            eval_attacker = Evaluation_Attacker(
+                config, config.env, config.corruption_agent, config.eval_attack_eps,
+                config.state_dim, config.action_dim, state_std, act_std, rew_std, rew_min, config.eval_attack_mode,
+                MODEL_PATH[config.corruption_agent],
+            )
+            print("eval_attack: True")
     else:
         eval_attacker = None
         print("eval_attack: False")
@@ -445,8 +449,6 @@ def test(config: TrainConfig, logger: Logger):
         model.eval()
         # logger.info(f"Network: \n{str(model)}")
         # logger.info(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
-        if config.test_attack_mode == "nsaop":
-            eval_attacker = None
         eval_log = dt_func.eval_fn(config, env, model, eval_attacker)
         for k, v in eval_log.items():
             logger.record(k, v)
