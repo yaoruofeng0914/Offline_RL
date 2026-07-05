@@ -110,7 +110,9 @@ class TrainConfig:
     correct_start: int = 50                 # 从第几个 epoch 开始校正
     correct_thershold: Tuple[float] = None  # 异常值校正阈值 (act, rew)
     # ===========================================
-
+    # 消融实验开关
+    use_uncertainty_weighting: bool = True  # True = 完整 UDT，False = 消融掉不确定性加权
+    use_gating: bool = True  # True = 完整 UDT，False = 全局关闭门控
 
     def __post_init__(self):
         # train
@@ -349,11 +351,15 @@ def train(config: TrainConfig, logger: Logger):
     env.seed(config.seed)
 
     # model
+    # model
     model = set_model(config)
-    if any(name in config.env for name in ["hopper-medium", "walker2d-medium"]):
-        model.skip_gating = True
+    if config.use_gating:
+        if any(name in config.env for name in ["hopper-medium", "walker2d-medium"]):
+            model.skip_gating = True
+        else:
+            model.skip_gating = False
     else:
-        model.skip_gating = False
+        model.skip_gating = True  # 消融：全局关闭门控
     # logger.info(f"Network: \n{str(model)}")
     logger.info(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
 
@@ -449,9 +455,9 @@ def train(config: TrainConfig, logger: Logger):
                 with torch.no_grad():
                     diff = torch.square(pred.detach() - target.detach()).mean(-1, keepdim=True)
                     weight = torch.exp(-coef * diff)
-                    if logvar_for_loss is not None:
+                    if logvar_for_loss is not None and config.use_uncertainty_weighting:
                         var = logvar_for_loss.exp().mean(dim=-1, keepdim=True)
-                        uncertainty_weight = torch.exp(-2.0*var)
+                        uncertainty_weight = torch.exp(-2.0 * var)
                         weight = weight * uncertainty_weight
                 loss = F.mse_loss(pred, target.detach(), reduction="none")
                 loss = (loss * weight) * mask.unsqueeze(-1)
@@ -634,10 +640,13 @@ def test(config: TrainConfig, logger: Logger):
         model = set_model(config)
         model.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch)), strict=False)
         model.eval()
-        if any(name in config.env for name in ["hopper-medium", "walker2d-medium"]):
-            model.skip_gating = True
+        if config.use_gating:
+            if any(name in config.env for name in ["hopper-medium", "walker2d-medium"]):
+                model.skip_gating = True
+            else:
+                model.skip_gating = False
         else:
-            model.skip_gating = False
+            model.skip_gating = True  # 消融：全局关闭门控
         # logger.info(f"Network: \n{str(model)}")
         # logger.info(f"Total parameters: {sum(p.numel() for p in model.parameters())}")
 

@@ -76,6 +76,8 @@ for ENV in "${ENVS[@]}"; do
                     --use_wandb 0 \
                     --save_model True \
                     --use_udt True \
+                    --use_uncertainty_weighting False \
+                    --use_gating False \
                     > "$LOG_FILE" 2>&1 &
 
                 let current_batch++

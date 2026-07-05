@@ -105,7 +105,11 @@ echo "正在自动提取各 Case 的最高分..."
 SUMMARY_FILE="RDT_Summary_Scores.csv"   # 4. 改为 RDT 汇总文件
 
 # 5. 表头列名改为 RDT
-echo "Environment,Seed,Noise_Type,Attack_Type,RDT" > $SUMMARY_FILE
+echo "正在自动提取各 Case 的最高分..."
+SUMMARY_FILE="RDT_Summary_Scores.csv"
+
+# 表头改为双分数列
+echo "Environment,Seed,Noise_Type,Attack_Type,RDT_Att,RDT_Raw" > $SUMMARY_FILE
 
 for ENV in "${ENVS[@]}"; do
     for MODE in "${MODES[@]}"; do
@@ -114,14 +118,16 @@ for ENV in "${ENVS[@]}"; do
                 LOG_FILE="${LOG_DIR}/${ENV}_${MODE}_${TAG}_${SEED}.txt"
 
                 if [ -f "$LOG_FILE" ]; then
-                    RUN_DIR=$(grep "Logging to" "$LOG_FILE" | awk '{print $3}')
-                    BEST_SCORE="NaN"
+                    RUN_DIR=$(grep "Logging to" "$LOG_FILE" | awk '{print $NF}')
+                    BEST_ATT="NaN"
+                    BEST_RAW="NaN"
                     if [ -n "$RUN_DIR" ] && [ -f "${RUN_DIR}/best_score.txt" ]; then
-                        SCORE_RAW=$(cat "${RUN_DIR}/best_score.txt")
-                        BEST_SCORE=$(echo "$SCORE_RAW" | cut -d'_' -f1)
+                        BEST_LINE=$(cat "${RUN_DIR}/best_score.txt")
+                        BEST_ATT=$(echo "$BEST_LINE" | cut -d'_' -f1)
+                        BEST_RAW=$(echo "$BEST_LINE" | cut -d'_' -f2)
                     fi
                     CAP_MODE="$(tr '[:lower:]' '[:upper:]' <<< ${MODE:0:1})${MODE:1}"
-                    echo "$ENV,$SEED,$CAP_MODE,$TAG,$BEST_SCORE" >> $SUMMARY_FILE
+                    echo "$ENV,$SEED,$CAP_MODE,$TAG,$BEST_ATT,$BEST_RAW" >> $SUMMARY_FILE
                 fi
             done
         done
