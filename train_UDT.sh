@@ -1,35 +1,35 @@
 #!/bin/bash
 ENVS=(
-#"door-expert-v0"
-#"halfcheetah-medium-replay-v2"
-#"hammer-expert-v0"
+"door-expert-v0"
+"halfcheetah-medium-replay-v2"
+"hammer-expert-v0"
 "hopper-medium-replay-v2"
-#"kitchen-complete-v0"
-#"kitchen-mixed-v0"
-#"kitchen-partial-v0"
-#"relocate-expert-v0"
-#"walker2d-medium-replay-v2"
+"kitchen-complete-v0"
+"kitchen-mixed-v0"
+"kitchen-partial-v0"
+"relocate-expert-v0"
+"walker2d-medium-replay-v2"
 )
 MODES=(
 "random"
-#"adversarial"
+"adversarial"
 )
 
 TAGS=(
-#"obs"
+"obs"
 "act"
-#"rew"
+"rew"
 )
 
 SEEDS=(
 0
-#1
+1
 )
 
 LOG_DIR="full_logs_udt"          # 改为                                               UDT 日志目录
 mkdir -p "$LOG_DIR"
 
-MAX_PARALLEL=3
+MAX_PARALLEL=6
 current_batch=0
 completed_jobs=0
 
@@ -76,8 +76,8 @@ for ENV in "${ENVS[@]}"; do
                     --use_wandb 0 \
                     --save_model True \
                     --use_udt True \
-                    --use_uncertainty_weighting False \
-                    --use_gating False \
+                    --use_uncertainty_weighting False\
+                    --use_gating True\
                     > "$LOG_FILE" 2>&1 &
 
                 let current_batch++

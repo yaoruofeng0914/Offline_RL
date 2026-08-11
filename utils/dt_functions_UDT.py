@@ -227,31 +227,31 @@ def eval_rollout(
 
     if hasattr(config, 'test_attack_mode') and config.test_attack_mode == "nsaop":
         if eval_attack_tag == "obs":
-            env_state_std = getattr(config, 'state_std', None)
             nsaop_obs_attacker = NSAOPObsAttacker(
                 state_dim=model.state_dim,
-                state_std=env_state_std,
+                state_mean=config.norm_state_mean,
+                norm_state_std=config.norm_state_std,
+                attack_state_std=config.attack_state_std,
                 eps_coeff=global_eps_coeff,
-                device=device
+                device=device,
             )
         elif eval_attack_tag == "act":
             action_low = env.action_space.low
             action_high = env.action_space.high
             # 获取 config 中的 action_std，如果没有则为 None，由攻击器内部进行 0.5 的合理预估
-            env_act_std = getattr(config, 'act_std', None)
+            env_act_std = config.attack_act_std
             nsaop_act_attacker = NSAOPActAttacker(
                 action_dim=model.action_dim,
-                action_std=env_act_std,  # <--- 使用 std 保持三通道统一信噪比
-                action_low=action_low,  # <--- 保留您优秀的动态边界逻辑
+                action_std=env_act_std,
+                action_low=action_low,
                 action_high=action_high,
                 eps_coeff=global_eps_coeff,
                 device=device
             )
         elif eval_attack_tag == "rew":
-            env_rew_std = getattr(config, 'rew_std', 1.0) if config else 1.0
             nsaop_rew_attacker = NSAOPRewAttacker(
-                rew_std=env_rew_std,
-                reward_scale=config.reward_scale if config else 1.0,
+                rew_std=config.attack_rew_std,
+                reward_scale=config.reward_scale,
                 eps_coeff=global_eps_coeff,
                 device=device
             )
@@ -601,13 +601,16 @@ class DecisionTransformer(nn.Module):
 
 class NSAOPObsAttacker:
     """
-    非平稳观测攻击器：基于状态标准差的无量纲统一缩放方案
+    Observation Drift defined in raw/physical observation space,
+    while operating on normalized observations received from wrap_env.
     """
 
     def __init__(
             self,
             state_dim: int,
-            state_std: Optional[np.ndarray] = None,
+            state_mean: np.ndarray,
+            norm_state_std: np.ndarray,
+            attack_state_std: np.ndarray,
             burst_prob: float = 0.1,
             recover_prob: float = 0.3,
             momentum: float = 0.85,
@@ -622,17 +625,39 @@ class NSAOPObsAttacker:
         self.device = device
 
         self.m_state = 0
-        self.accumulated_drift = torch.zeros(state_dim, device=device)
 
-        if state_std is None:
-            state_std = np.ones(state_dim)
-        self.state_std = torch.tensor(state_std, dtype=torch.float32, device=device).view(-1)
+        self.state_mean = torch.tensor(
+            state_mean,
+            dtype=torch.float32,
+            device=device
+        ).view(-1)
+
+        self.norm_state_std = torch.tensor(
+            norm_state_std,
+            dtype=torch.float32,
+            device=device
+        ).view(-1)
+
+        self.attack_state_std = torch.tensor(
+            attack_state_std,
+            dtype=torch.float32,
+            device=device
+        ).view(-1)
+
+        # 这里保存 normalized-space 中的 drift
+        self.accumulated_drift = torch.zeros(
+            state_dim,
+            device=device
+        )
 
     def step(self):
         if self.m_state == 0:
-            if np.random.rand() < self.burst_prob: self.m_state = 1
+            if np.random.rand() < self.burst_prob:
+                self.m_state = 1
         else:
-            if np.random.rand() < self.recover_prob: self.m_state = 0
+            if np.random.rand() < self.recover_prob:
+                self.m_state = 0
+
         return self.m_state
 
     def attack_obs(self, obs: np.ndarray) -> np.ndarray:
@@ -640,21 +665,57 @@ class NSAOPObsAttacker:
             self.accumulated_drift.zero_()
             return obs
 
-        obs_tensor = torch.tensor(obs, dtype=torch.float32, device=self.device)
-        direction = torch.sign(obs_tensor + 1e-8)
-
-        # 无量纲缩放：全局系数 * 状态标准差 * 方向
-        scaled_eps = self.eps_coeff * self.state_std * direction
-
-        self.accumulated_drift = (
-                self.momentum * self.accumulated_drift
-                + (1 - self.momentum) * scaled_eps
+        # obs 是 wrap_env 输出的 normalized observation
+        obs_norm = torch.tensor(
+            obs,
+            dtype=torch.float32,
+            device=self.device
         )
 
-        # 物理饱和截断限制：防止长序列发散，限制在 3 倍标准差以内
-        self.accumulated_drift = torch.clamp(self.accumulated_drift, -3.0 * self.state_std, 3.0 * self.state_std)
+        # 1. 恢复 raw observation，仅用于确定物理方向
+        obs_raw = (
+            obs_norm * self.norm_state_std
+            + self.state_mean
+        )
 
-        return (obs_tensor + self.accumulated_drift).cpu().numpy()
+        direction = torch.sign(obs_raw + 1e-8)
+
+        # 2. raw physical drift:
+        # delta_raw = eps * attack_std * direction
+        #
+        # 转到 normalized space:
+        # delta_norm = delta_raw / norm_std
+        target_drift_norm = (
+            self.eps_coeff
+            * self.attack_state_std
+            / self.norm_state_std
+            * direction
+        )
+
+        # 3. temporal EWMA drift
+        self.accumulated_drift = (
+            self.momentum * self.accumulated_drift
+            + (1.0 - self.momentum) * target_drift_norm
+        )
+
+        # 4. 对应 raw space ±3 attack std 的物理饱和上限
+        max_drift_norm = (
+            3.0
+            * self.attack_state_std
+            / self.norm_state_std
+        )
+
+        self.accumulated_drift = torch.maximum(
+            torch.minimum(
+                self.accumulated_drift,
+                max_drift_norm
+            ),
+            -max_drift_norm
+        )
+
+        return (
+            obs_norm + self.accumulated_drift
+        ).cpu().numpy()
 
 
 class NSAOPActAttacker:

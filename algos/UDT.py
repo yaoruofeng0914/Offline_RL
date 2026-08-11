@@ -334,9 +334,16 @@ def train(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = dt_func.SequenceDataset(config, logger)
-    config.state_std = dataset.state_std
-    config.rew_std = dataset.rew_std
-    config.act_std = dataset.act_std
+    # ===== 模型 preprocessing 统计量 =====
+    config.norm_state_mean = dataset.state_mean
+    config.norm_state_std = dataset.state_std
+
+    # ===== Drift-Attack 固定物理尺度 =====
+    clean_state_std, clean_act_std, clean_rew_std, _ = func.get_state_std(config)
+
+    config.attack_state_std = clean_state_std
+    config.attack_act_std = clean_act_std
+    config.attack_rew_std = clean_rew_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
 
     num_trajectories = len(dataset.dataset)
@@ -588,9 +595,16 @@ def test(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = dt_func.SequenceDataset(config, logger)
-    config.state_std = dataset.state_std
-    config.rew_std = dataset.rew_std
-    config.act_std = dataset.act_std
+    # ===== 模型 preprocessing 统计量 =====
+    config.norm_state_mean = dataset.state_mean
+    config.norm_state_std = dataset.state_std
+
+    # ===== Drift-Attack 固定物理尺度 =====
+    clean_state_std, clean_act_std, clean_rew_std, _ = func.get_state_std(config)
+
+    config.attack_state_std = clean_state_std
+    config.attack_act_std = clean_act_std
+    config.attack_rew_std = clean_rew_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 
