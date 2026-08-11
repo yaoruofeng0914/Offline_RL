@@ -361,10 +361,10 @@ def train(config: TrainConfig, logger: Logger):
     # model
     model = set_model(config)
     if config.use_gating:
-        if any(name in config.env for name in ["hopper-medium", "walker2d-medium"]):
-            model.skip_gating = True
-        else:
-            model.skip_gating = False
+        # if any(name in config.env for name in ["hopper-medium", "walker2d-medium"]):
+        # model.skip_gating = True
+        # else:
+        model.skip_gating = False
     else:
         model.skip_gating = True  # 消融：全局关闭门控
     # logger.info(f"Network: \n{str(model)}")
