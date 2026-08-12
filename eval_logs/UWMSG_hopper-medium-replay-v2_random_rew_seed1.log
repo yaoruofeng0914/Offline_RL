@@ -3,141 +3,143 @@ Logging to /home/user/Offline_RL/checkpoint4baseline/UWMSG/hopper-medium-replay-
 Load new dataset from /home/user/Offline_RL/log_attack_data/hopper-medium-replay-v2/random_0_ratio_0.1_rew_30.0_0.3.pth
 random rewards
 Attack name: _ratio_0.1_rew_30.0_0.3
-/home/user/Offline_RL/gym-0.19.0/gym/logger.py:34: UserWarning: [33mWARN: Box bound precision lowered by casting to float32[0m
+/home/user/miniconda3/envs/offline_rl/lib/python3.8/site-packages/gym/logger.py:34: UserWarning: [33mWARN: Box bound precision lowered by casting to float32[0m
   warnings.warn(colorize("%s: %s" % ("WARN", msg % args), "yellow"))
-/home/user/Offline_RL/algos/UWMSG.py:761: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+/home/user/Offline_RL/algos/UWMSG.py:775: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
   dataset = torch.load(dataset_path)
 /home/user/Offline_RL/utils/attack.py:449: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
   new_dataset = torch.load(dataset_path)
-/home/user/Offline_RL/algos/UWMSG.py:794: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+/home/user/Offline_RL/utils/functions.py:287: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  dataset = torch.load(dataset_path)
+/home/user/Offline_RL/algos/UWMSG.py:820: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
   actor.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch))["actor"])
 eval epoch: 910
-  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:01,  8.11it/s] 30%|███       | 3/10 [00:00<00:00, 11.20it/s] 50%|█████     | 5/10 [00:00<00:00, 13.00it/s] 80%|████████  | 8/10 [00:00<00:00, 16.45it/s]100%|██████████| 10/10 [00:00<00:00, 15.52it/s]-------------------------------------------
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:07,  1.27it/s] 20%|██        | 2/10 [00:01<00:06,  1.23it/s] 30%|███       | 3/10 [00:02<00:07,  1.01s/it] 40%|████      | 4/10 [00:03<00:05,  1.01it/s] 50%|█████     | 5/10 [00:04<00:04,  1.09it/s] 60%|██████    | 6/10 [00:05<00:03,  1.24it/s] 70%|███████   | 7/10 [00:05<00:02,  1.33it/s] 80%|████████  | 8/10 [00:06<00:01,  1.43it/s] 90%|█████████ | 9/10 [00:07<00:00,  1.40it/s]100%|██████████| 10/10 [00:07<00:00,  1.50it/s]100%|██████████| 10/10 [00:07<00:00,  1.29it/s]-------------------------------------------
 | eval/                        |          |
-|    normalized_score_mean_att | 22.9214  |
+|    normalized_score_mean_att | 22.1846  |
 |    normalized_score_mean_raw | 22.9282  |
-|    normalized_score_std_att  | 5.50274  |
+|    normalized_score_std_att  | 5.28243  |
 |    normalized_score_std_raw  | 5.50479  |
-|    reward_mean_att           | 725.722  |
+|    reward_mean_att           | 701.742  |
 |    reward_mean_raw           | 725.941  |
-|    reward_std_att            | 179.091  |
+|    reward_std_att            | 171.92   |
 |    reward_std_raw            | 179.157  |
 -------------------------------------------
 
 eval epoch: 920
-  0%|          | 0/10 [00:00<?, ?it/s] 30%|███       | 3/10 [00:00<00:00, 20.29it/s] 60%|██████    | 6/10 [00:00<00:00, 20.18it/s] 90%|█████████ | 9/10 [00:00<00:00, 19.05it/s]100%|██████████| 10/10 [00:00<00:00, 20.50it/s]-------------------------------------------
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:04,  2.16it/s] 20%|██        | 2/10 [00:01<00:04,  1.60it/s] 30%|███       | 3/10 [00:01<00:04,  1.43it/s] 40%|████      | 4/10 [00:02<00:04,  1.30it/s] 50%|█████     | 5/10 [00:03<00:03,  1.51it/s] 60%|██████    | 6/10 [00:03<00:02,  1.52it/s] 70%|███████   | 7/10 [00:04<00:01,  1.67it/s] 80%|████████  | 8/10 [00:05<00:01,  1.70it/s] 90%|█████████ | 9/10 [00:06<00:00,  1.41it/s]100%|██████████| 10/10 [00:06<00:00,  1.74it/s]100%|██████████| 10/10 [00:06<00:00,  1.59it/s]-------------------------------------------
 | eval/                        |          |
-|    normalized_score_mean_att | 21.0392  |
+|    normalized_score_mean_att | 20.3746  |
 |    normalized_score_mean_raw | 21.0452  |
-|    normalized_score_std_att  | 8.44817  |
+|    normalized_score_std_att  | 8.29474  |
 |    normalized_score_std_raw  | 8.44959  |
-|    reward_mean_att           | 664.463  |
+|    reward_mean_att           | 642.833  |
 |    reward_mean_raw           | 664.658  |
-|    reward_std_att            | 274.952  |
+|    reward_std_att            | 269.958  |
 |    reward_std_raw            | 274.998  |
 -------------------------------------------
 
 eval epoch: 930
-  0%|          | 0/10 [00:00<?, ?it/s] 20%|██        | 2/10 [00:00<00:00, 19.54it/s] 50%|█████     | 5/10 [00:00<00:00, 19.92it/s] 80%|████████  | 8/10 [00:00<00:00, 21.02it/s]100%|██████████| 10/10 [00:00<00:00, 20.30it/s]-------------------------------------------
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:04,  1.82it/s] 20%|██        | 2/10 [00:01<00:05,  1.59it/s] 30%|███       | 3/10 [00:01<00:04,  1.74it/s] 40%|████      | 4/10 [00:02<00:03,  1.66it/s] 50%|█████     | 5/10 [00:03<00:03,  1.49it/s] 60%|██████    | 6/10 [00:03<00:02,  1.51it/s] 70%|███████   | 7/10 [00:04<00:01,  1.67it/s] 80%|████████  | 8/10 [00:04<00:01,  1.62it/s] 90%|█████████ | 9/10 [00:05<00:00,  1.49it/s]100%|██████████| 10/10 [00:06<00:00,  1.49it/s]100%|██████████| 10/10 [00:06<00:00,  1.56it/s]-------------------------------------------
 | eval/                        |          |
-|    normalized_score_mean_att | 21.842   |
+|    normalized_score_mean_att | 21.1848  |
 |    normalized_score_mean_raw | 21.848   |
-|    normalized_score_std_att  | 4.67734  |
+|    normalized_score_std_att  | 4.67395  |
 |    normalized_score_std_raw  | 4.6774   |
-|    reward_mean_att           | 690.592  |
+|    reward_mean_att           | 669.201  |
 |    reward_mean_raw           | 690.786  |
-|    reward_std_att            | 152.227  |
+|    reward_std_att            | 152.117  |
 |    reward_std_raw            | 152.229  |
 -------------------------------------------
 
 eval epoch: 940
-  0%|          | 0/10 [00:00<?, ?it/s] 30%|███       | 3/10 [00:00<00:00, 26.26it/s] 60%|██████    | 6/10 [00:00<00:00, 20.00it/s] 90%|█████████ | 9/10 [00:00<00:00, 20.63it/s]100%|██████████| 10/10 [00:00<00:00, 20.81it/s]-------------------------------------------
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:01,  5.83it/s] 20%|██        | 2/10 [00:00<00:03,  2.33it/s] 30%|███       | 3/10 [00:01<00:04,  1.70it/s] 40%|████      | 4/10 [00:02<00:04,  1.24it/s] 50%|█████     | 5/10 [00:03<00:03,  1.34it/s] 60%|██████    | 6/10 [00:03<00:02,  1.44it/s] 70%|███████   | 7/10 [00:04<00:01,  1.56it/s] 80%|████████  | 8/10 [00:05<00:01,  1.55it/s] 90%|█████████ | 9/10 [00:05<00:00,  1.55it/s]100%|██████████| 10/10 [00:06<00:00,  1.52it/s]100%|██████████| 10/10 [00:06<00:00,  1.55it/s]-------------------------------------------
 | eval/                        |          |
-|    normalized_score_mean_att | 21.8764  |
+|    normalized_score_mean_att | 21.334   |
 |    normalized_score_mean_raw | 21.8812  |
-|    normalized_score_std_att  | 7.52139  |
+|    normalized_score_std_att  | 7.30063  |
 |    normalized_score_std_raw  | 7.52337  |
-|    reward_mean_att           | 691.71   |
+|    reward_mean_att           | 674.059  |
 |    reward_mean_raw           | 691.867  |
-|    reward_std_att            | 244.789  |
+|    reward_std_att            | 237.604  |
 |    reward_std_raw            | 244.853  |
 -------------------------------------------
 
 eval epoch: 950
-  0%|          | 0/10 [00:00<?, ?it/s] 20%|██        | 2/10 [00:00<00:00, 16.25it/s] 50%|█████     | 5/10 [00:00<00:00, 21.61it/s] 80%|████████  | 8/10 [00:00<00:00, 21.89it/s]100%|██████████| 10/10 [00:00<00:00, 21.42it/s]-------------------------------------------
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:01<00:09,  1.04s/it] 20%|██        | 2/10 [00:01<00:05,  1.41it/s] 30%|███       | 3/10 [00:01<00:04,  1.70it/s] 40%|████      | 4/10 [00:02<00:03,  1.89it/s] 50%|█████     | 5/10 [00:02<00:02,  2.01it/s] 60%|██████    | 6/10 [00:03<00:01,  2.07it/s] 70%|███████   | 7/10 [00:03<00:01,  2.05it/s] 80%|████████  | 8/10 [00:04<00:01,  1.84it/s] 90%|█████████ | 9/10 [00:05<00:00,  1.80it/s]100%|██████████| 10/10 [00:05<00:00,  1.70it/s]100%|██████████| 10/10 [00:05<00:00,  1.75it/s]-------------------------------------------
 | eval/                        |          |
-|    normalized_score_mean_att | 21.853   |
+|    normalized_score_mean_att | 21.2623  |
 |    normalized_score_mean_raw | 21.8584  |
-|    normalized_score_std_att  | 4.94067  |
+|    normalized_score_std_att  | 4.83226  |
 |    normalized_score_std_raw  | 4.94149  |
-|    reward_mean_att           | 690.948  |
+|    reward_mean_att           | 671.723  |
 |    reward_mean_raw           | 691.126  |
-|    reward_std_att            | 160.798  |
+|    reward_std_att            | 157.269  |
 |    reward_std_raw            | 160.825  |
 -------------------------------------------
 
 eval epoch: 960
-  0%|          | 0/10 [00:00<?, ?it/s] 30%|███       | 3/10 [00:00<00:00, 20.26it/s] 60%|██████    | 6/10 [00:00<00:00, 22.35it/s] 90%|█████████ | 9/10 [00:00<00:00, 19.55it/s]100%|██████████| 10/10 [00:00<00:00, 20.16it/s]-------------------------------------------
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:04,  2.19it/s] 20%|██        | 2/10 [00:01<00:04,  1.80it/s] 30%|███       | 3/10 [00:01<00:05,  1.39it/s] 40%|████      | 4/10 [00:02<00:03,  1.57it/s] 50%|█████     | 5/10 [00:03<00:03,  1.65it/s] 60%|██████    | 6/10 [00:03<00:02,  1.63it/s] 70%|███████   | 7/10 [00:04<00:02,  1.24it/s] 80%|████████  | 8/10 [00:05<00:01,  1.42it/s] 90%|█████████ | 9/10 [00:06<00:00,  1.44it/s]100%|██████████| 10/10 [00:06<00:00,  1.47it/s]100%|██████████| 10/10 [00:06<00:00,  1.49it/s]-------------------------------------------
 | eval/                        |          |
-|    normalized_score_mean_att | 23.2519  |
+|    normalized_score_mean_att | 22.568   |
 |    normalized_score_mean_raw | 23.258   |
-|    normalized_score_std_att  | 6.8767   |
+|    normalized_score_std_att  | 6.69226  |
 |    normalized_score_std_raw  | 6.87838  |
-|    reward_mean_att           | 736.477  |
+|    reward_mean_att           | 714.219  |
 |    reward_mean_raw           | 736.675  |
-|    reward_std_att            | 223.807  |
+|    reward_std_att            | 217.804  |
 |    reward_std_raw            | 223.862  |
 -------------------------------------------
 
 eval epoch: 970
-  0%|          | 0/10 [00:00<?, ?it/s] 30%|███       | 3/10 [00:00<00:00, 24.77it/s] 60%|██████    | 6/10 [00:00<00:00, 19.72it/s] 90%|█████████ | 9/10 [00:00<00:00, 19.90it/s]100%|██████████| 10/10 [00:00<00:00, 21.05it/s]-------------------------------------------
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:04,  2.08it/s] 20%|██        | 2/10 [00:01<00:04,  1.96it/s] 30%|███       | 3/10 [00:01<00:03,  1.77it/s] 40%|████      | 4/10 [00:02<00:03,  1.71it/s] 50%|█████     | 5/10 [00:02<00:03,  1.60it/s] 60%|██████    | 6/10 [00:04<00:03,  1.30it/s] 70%|███████   | 7/10 [00:04<00:02,  1.48it/s] 80%|████████  | 8/10 [00:05<00:01,  1.40it/s] 90%|█████████ | 9/10 [00:05<00:00,  1.42it/s]100%|██████████| 10/10 [00:06<00:00,  1.63it/s]100%|██████████| 10/10 [00:06<00:00,  1.57it/s]-------------------------------------------
 | eval/                        |          |
-|    normalized_score_mean_att | 22.1187  |
+|    normalized_score_mean_att | 21.2888  |
 |    normalized_score_mean_raw | 22.1262  |
-|    normalized_score_std_att  | 6.22155  |
+|    normalized_score_std_att  | 5.93571  |
 |    normalized_score_std_raw  | 6.22407  |
-|    reward_mean_att           | 699.597  |
+|    reward_mean_att           | 672.588  |
 |    reward_mean_raw           | 699.84   |
-|    reward_std_att            | 202.485  |
+|    reward_std_att            | 193.182  |
 |    reward_std_raw            | 202.567  |
 -------------------------------------------
 
 eval epoch: 980
-  0%|          | 0/10 [00:00<?, ?it/s] 30%|███       | 3/10 [00:00<00:00, 19.13it/s] 50%|█████     | 5/10 [00:00<00:00, 17.80it/s] 70%|███████   | 7/10 [00:00<00:00, 16.68it/s] 90%|█████████ | 9/10 [00:00<00:00, 15.78it/s]100%|██████████| 10/10 [00:00<00:00, 17.15it/s]-------------------------------------------
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:04,  1.94it/s] 20%|██        | 2/10 [00:01<00:05,  1.57it/s] 30%|███       | 3/10 [00:02<00:05,  1.34it/s] 40%|████      | 4/10 [00:02<00:04,  1.25it/s] 50%|█████     | 5/10 [00:03<00:03,  1.30it/s] 60%|██████    | 6/10 [00:04<00:02,  1.40it/s] 70%|███████   | 7/10 [00:05<00:02,  1.18it/s] 80%|████████  | 8/10 [00:06<00:01,  1.09it/s] 90%|█████████ | 9/10 [00:07<00:00,  1.14it/s]100%|██████████| 10/10 [00:07<00:00,  1.31it/s]100%|██████████| 10/10 [00:07<00:00,  1.28it/s]-------------------------------------------
 | eval/                        |          |
-|    normalized_score_mean_att | 25.2577  |
+|    normalized_score_mean_att | 24.4344  |
 |    normalized_score_mean_raw | 25.2651  |
-|    normalized_score_std_att  | 6.85678  |
+|    normalized_score_std_att  | 6.78438  |
 |    normalized_score_std_raw  | 6.85747  |
-|    reward_mean_att           | 801.759  |
+|    reward_mean_att           | 774.964  |
 |    reward_mean_raw           | 802      |
-|    reward_std_att            | 223.159  |
+|    reward_std_att            | 220.802  |
 |    reward_std_raw            | 223.181  |
 -------------------------------------------
 
 eval epoch: 990
-  0%|          | 0/10 [00:00<?, ?it/s] 20%|██        | 2/10 [00:00<00:00, 14.41it/s] 50%|█████     | 5/10 [00:00<00:00, 19.64it/s] 80%|████████  | 8/10 [00:00<00:00, 20.29it/s]100%|██████████| 10/10 [00:00<00:00, 20.04it/s]-------------------------------------------
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:01<00:09,  1.02s/it] 20%|██        | 2/10 [00:01<00:07,  1.06it/s] 30%|███       | 3/10 [00:02<00:06,  1.15it/s] 40%|████      | 4/10 [00:03<00:04,  1.37it/s] 50%|█████     | 5/10 [00:03<00:03,  1.65it/s] 60%|██████    | 6/10 [00:04<00:02,  1.62it/s] 70%|███████   | 7/10 [00:04<00:01,  1.55it/s] 80%|████████  | 8/10 [00:05<00:01,  1.58it/s] 90%|█████████ | 9/10 [00:06<00:00,  1.60it/s]100%|██████████| 10/10 [00:06<00:00,  1.75it/s]100%|██████████| 10/10 [00:06<00:00,  1.51it/s]-------------------------------------------
 | eval/                        |          |
-|    normalized_score_mean_att | 23.5738  |
+|    normalized_score_mean_att | 22.8972  |
 |    normalized_score_mean_raw | 23.5798  |
-|    normalized_score_std_att  | 6.70062  |
+|    normalized_score_std_att  | 6.58609  |
 |    normalized_score_std_raw  | 6.70167  |
-|    reward_mean_att           | 746.954  |
+|    reward_mean_att           | 724.933  |
 |    reward_mean_raw           | 747.15   |
-|    reward_std_att            | 218.077  |
+|    reward_std_att            | 214.349  |
 |    reward_std_raw            | 218.111  |
 -------------------------------------------
 
 eval epoch: 1000
-  0%|          | 0/10 [00:00<?, ?it/s] 20%|██        | 2/10 [00:00<00:00, 12.43it/s] 40%|████      | 4/10 [00:00<00:00, 13.97it/s] 70%|███████   | 7/10 [00:00<00:00, 17.85it/s]100%|██████████| 10/10 [00:00<00:00, 18.38it/s]100%|██████████| 10/10 [00:00<00:00, 17.25it/s]-------------------------------------------
+  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:00<00:07,  1.22it/s] 20%|██        | 2/10 [00:01<00:06,  1.25it/s] 30%|███       | 3/10 [00:02<00:04,  1.55it/s] 40%|████      | 4/10 [00:02<00:04,  1.33it/s] 50%|█████     | 5/10 [00:03<00:03,  1.43it/s] 60%|██████    | 6/10 [00:04<00:02,  1.50it/s] 70%|███████   | 7/10 [00:04<00:01,  1.55it/s] 80%|████████  | 8/10 [00:05<00:01,  1.49it/s] 90%|█████████ | 9/10 [00:06<00:00,  1.55it/s]100%|██████████| 10/10 [00:06<00:00,  1.40it/s]100%|██████████| 10/10 [00:06<00:00,  1.43it/s]-------------------------------------------
 | eval/                        |          |
-|    normalized_score_mean_att | 26.7843  |
+|    normalized_score_mean_att | 25.9499  |
 |    normalized_score_mean_raw | 26.7918  |
-|    normalized_score_std_att  | 6.5823   |
+|    normalized_score_std_att  | 6.39328  |
 |    normalized_score_std_raw  | 6.58399  |
-|    reward_mean_att           | 851.443  |
+|    reward_mean_att           | 824.285  |
 |    reward_mean_raw           | 851.685  |
-|    reward_std_att            | 214.226  |
+|    reward_std_att            | 208.074  |
 |    reward_std_raw            | 214.281  |
 -------------------------------------------
 

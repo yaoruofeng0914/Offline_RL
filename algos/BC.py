@@ -300,42 +300,52 @@ def eval_actor_nsaop(config, env, actor):
         float(env.action_space.high.max()) - 1e-6,
     ]
 
-    # 初始化 NSAOP 攻击器（补全参数）
-    nsaop_obs = nsaop_act = nsaop_rew = None
-    if config.corruption_tag == "obs":
-        nsaop_obs = NSAOPObsAttacker(
-            state_dim=env.observation_space.shape[0],
-            state_std=config.state_std,
-            eps_coeff=config.nsaop_eps_coeff,
-            device=device,
-        )
-    elif config.corruption_tag == "act":
-        nsaop_act = NSAOPActAttacker(
-            action_dim=env.action_space.shape[0],
-            action_std=config.act_std,
-            action_low=env.action_space.low,
-            action_high=env.action_space.high,
-            eps_coeff=config.nsaop_eps_coeff,
-            device=device,
-        )
-    elif config.corruption_tag == "rew":
-        nsaop_rew = NSAOPRewAttacker(
-            rew_std=config.rew_std,
-            reward_scale=config.reward_scale,
-            eps_coeff=config.nsaop_eps_coeff,
-            device=device,
-        )
-
     actor.eval()
-    episode_rewards_att = []      # 存放攻击后的累积回报
-    episode_rewards_raw = []      # 存放原始累积回报
+    episode_rewards_att = []
+    episode_rewards_raw = []
 
     for _ in trange(n_episodes):
+
+        # 每个 episode 都重新初始化 attacker
+        nsaop_obs = None
+        nsaop_act = None
+        nsaop_rew = None
+
+        if config.corruption_tag == "obs":
+            nsaop_obs = NSAOPObsAttacker(
+                state_dim=env.observation_space.shape[0],
+                attack_state_std=config.attack_state_std,
+                norm_state_mean=config.norm_state_mean,
+                norm_state_std=config.norm_state_std,
+                eps_coeff=config.nsaop_eps_coeff,
+                device=device,
+            )
+
+        elif config.corruption_tag == "act":
+            nsaop_act = NSAOPActAttacker(
+                action_dim=env.action_space.shape[0],
+                action_std=config.act_std,
+                action_low=env.action_space.low,
+                action_high=env.action_space.high,
+                eps_coeff=config.nsaop_eps_coeff,
+                device=device,
+            )
+
+        elif config.corruption_tag == "rew":
+            nsaop_rew = NSAOPRewAttacker(
+                rew_std=config.rew_std,
+                reward_scale=1.0,
+                eps_coeff=config.nsaop_eps_coeff,
+                device=device,
+            )
+
         state, done = env.reset(), False
-        if nsaop_obs:
+
+        if nsaop_obs is not None:
             state = nsaop_obs.attack_obs(state)
+
         episode_reward_att = 0.0
-        episode_reward_raw = 0.0   # 新增
+        episode_reward_raw = 0.0
 
         while not done:
             action = actor.act(state, device)
@@ -411,7 +421,16 @@ def train(config: TrainConfig, logger: Logger):
 
     dataset = d4rl.qlearning_dataset(env, dataset, terminate_on_end=True)
     dataset, state_mean, state_std = func.normalize_dataset(config, dataset)
-    config.state_std = state_std
+
+    # BC 模型实际使用的 observation preprocessing
+    config.norm_state_mean = state_mean
+    config.norm_state_std = state_std
+
+    # Drift-Attack 的 observation 物理尺度必须来自 clean dataset
+    clean_state_std, _, _, _ = func.get_state_std(config)
+    config.attack_state_std = clean_state_std
+
+    # Action / Reward 暂时保持原 benchmark 逻辑
     config.act_std = np.std(dataset["actions"], axis=0) + 1e-6
     config.rew_std = np.std(dataset["rewards"]) + 1e-6
     env = func.wrap_env(env, state_mean=state_mean, state_std=state_std)
@@ -590,7 +609,16 @@ def test(config: TrainConfig, logger: Logger):
 
     dataset = d4rl.qlearning_dataset(env, dataset, terminate_on_end=True)
     dataset, state_mean, state_std = func.normalize_dataset(config, dataset)
-    config.state_std = state_std
+
+    # BC 模型实际使用的 observation preprocessing
+    config.norm_state_mean = state_mean
+    config.norm_state_std = state_std
+
+    # Drift-Attack 的 observation 物理尺度必须来自 clean dataset
+    clean_state_std, _, _, _ = func.get_state_std(config)
+    config.attack_state_std = clean_state_std
+
+    # Action / Reward 暂时保持原 benchmark 逻辑
     config.act_std = np.std(dataset["actions"], axis=0) + 1e-6
     config.rew_std = np.std(dataset["rewards"]) + 1e-6
     env = func.wrap_env(env, state_mean=state_mean, state_std=state_std)

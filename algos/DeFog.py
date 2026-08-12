@@ -667,40 +667,6 @@ def eval_rollout(
 
 
 def eval_fn(config, env, model, eval_attacker=None):
-    nsaop_attacker = None
-    if config.test_attack_mode == "nsaop":
-        nsaop_attacker = {}
-        if config.corruption_tag == "obs":
-            nsaop_attacker['obs'] = NSAOPObsAttacker(
-                state_dim=config.state_dim,
-                state_std=config.state_std,
-                eps_coeff=config.nsaop_eps_coeff,
-                device=config.device,
-            )
-        elif config.corruption_tag == "act":
-            nsaop_attacker['act'] = NSAOPActAttacker(
-                action_dim=config.action_dim,
-                action_std=config.act_std,
-                action_low=env.action_space.low,
-                action_high=env.action_space.high,
-                eps_coeff=config.nsaop_eps_coeff,
-                device=config.device,
-            )
-        elif config.corruption_tag == "rew":
-            # 统一奖励攻击量纲（与 RDT/BC/CQL 一致）
-            if config.env.startswith("antmaze") or config.env.startswith("kitchen") or \
-               config.env.split("-")[0] in ["door", "pen", "hammer", "relocate"]:
-                attack_rew_scale = 1.0
-            elif config.env.startswith("hopper") or config.env.startswith("halfcheetah") or config.env.startswith("walker"):
-                attack_rew_scale = 0.001
-            else:
-                attack_rew_scale = 1.0
-            nsaop_attacker['rew'] = NSAOPRewAttacker(
-                rew_std=config.rew_std,
-                reward_scale=attack_rew_scale,
-                eps_coeff=config.nsaop_eps_coeff,
-                device=config.device,
-            )
     if config.corruption_obs > 0:
         eval_attack_tag = "obs"
     if config.corruption_act > 0:
@@ -711,7 +677,41 @@ def eval_fn(config, env, model, eval_attacker=None):
     for target_return in config.target_returns:
         eval_returns_att = []
         eval_returns_raw = []
+
         for _ in trange(config.n_episodes, desc="Evaluation", leave=False):
+
+            nsaop_attacker = None
+
+            if config.test_attack_mode == "nsaop":
+                nsaop_attacker = {}
+
+                if config.corruption_tag == "obs":
+                    nsaop_attacker["obs"] = NSAOPObsAttacker(
+                        state_dim=config.state_dim,
+                        attack_state_std=config.attack_state_std,
+                        norm_state_mean=config.norm_state_mean,
+                        norm_state_std=config.norm_state_std,
+                        eps_coeff=config.nsaop_eps_coeff,
+                        device=config.device,
+                    )
+
+                elif config.corruption_tag == "act":
+                    nsaop_attacker["act"] = NSAOPActAttacker(
+                        action_dim=config.action_dim,
+                        action_std=config.act_std,
+                        action_low=env.action_space.low,
+                        action_high=env.action_space.high,
+                        eps_coeff=config.nsaop_eps_coeff,
+                        device=config.device,
+                    )
+
+                elif config.corruption_tag == "rew":
+                    nsaop_attacker["rew"] = NSAOPRewAttacker(
+                        rew_std=config.rew_std,
+                        reward_scale=1.0,
+                        eps_coeff=config.nsaop_eps_coeff,
+                        device=config.device,
+                    )
             eval_return_att, eval_return_raw, eval_len = eval_rollout(
                 model=model,
                 env=env,
@@ -767,9 +767,21 @@ def train(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = SequenceBuffer(config, logger)
-    config.state_std = dataset.state_std
+    # Drift-Attack 使用 clean physical statistics
+    clean_state_std, _, clean_rew_std, _ = func.get_state_std(config)
+
+    config.attack_state_std = clean_state_std
+
+    # DeFog 的 attacker 接收的是 raw env observation，
+    # 所以 attacker 本身不需要做额外的 normalization coordinate conversion
+    config.norm_state_mean = np.zeros_like(clean_state_std)
+    config.norm_state_std = np.ones_like(clean_state_std)
+
+    # Action 暂时保持原逻辑
     config.act_std = np.std(dataset.actions, axis=0) + 1e-6
-    config.rew_std = dataset.rew_std
+
+    # Reward attack 使用 clean raw reward std
+    config.rew_std = clean_rew_std
     logger.info(f"Dataset: {dataset.num_trajs} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 
@@ -951,18 +963,23 @@ def test(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = SequenceBuffer(config, logger)
-    config.state_std = dataset.state_std
-    config.act_std = np.std(dataset.actions, axis=0) + 1e-6
-    config.rew_std = dataset.rew_std
-    # logger.info(f"Dataset: {dataset.num_trajs} trajectories")
-    # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
+    # Drift-Attack 使用 clean physical statistics
+    clean_state_std, _, clean_rew_std, _ = func.get_state_std(config)
 
-    env = func.wrap_env(
-        env,
-        state_mean=dataset.state_mean,
-        state_std=dataset.state_std,
-        reward_scale=config.reward_scale,
-    )  # ?
+    config.attack_state_std = clean_state_std
+
+    # DeFog 的 attacker 接收的是 raw env observation，
+    # 所以 attacker 本身不需要做额外的 normalization coordinate conversion
+    config.norm_state_mean = np.zeros_like(clean_state_std)
+    config.norm_state_std = np.ones_like(clean_state_std)
+
+    # Action 暂时保持原逻辑
+    config.act_std = np.std(dataset.actions, axis=0) + 1e-6
+
+    # Reward attack 使用 clean raw reward std
+    config.rew_std = clean_rew_std
+    # logger.info(f"Dataset: {dataset.num_trajs} trajectories")
+    logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
     env.seed(config.seed)
 
     if config.eval_attack:

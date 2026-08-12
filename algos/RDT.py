@@ -377,9 +377,18 @@ def train(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = dt_func.SequenceDataset(config, logger)
-    config.state_std = dataset.state_std
-    config.rew_std = dataset.rew_std
+
+    # 模型 observation normalization
+    config.norm_state_mean = dataset.state_mean
+    config.norm_state_std = dataset.state_std
+
+    # Obs Drift 使用 clean physical scale
+    clean_state_std, _, _, _ = func.get_state_std(config)
+    config.attack_state_std = clean_state_std
+
+    # Action / Reward 暂时保持原来的逻辑
     config.act_std = dataset.act_std
+    config.rew_std = dataset.rew_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 
@@ -561,9 +570,18 @@ def test(config: TrainConfig, logger: Logger):
 
     # data & dataloader setup
     dataset = dt_func.SequenceDataset(config, logger)
-    config.state_std = dataset.state_std
-    config.rew_std = dataset.rew_std
+
+    # 模型 observation normalization
+    config.norm_state_mean = dataset.state_mean
+    config.norm_state_std = dataset.state_std
+
+    # Obs Drift 使用 clean physical scale
+    clean_state_std, _, _, _ = func.get_state_std(config)
+    config.attack_state_std = clean_state_std
+
+    # Action / Reward 暂时保持原来的逻辑
     config.act_std = dataset.act_std
+    config.rew_std = dataset.rew_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
 
