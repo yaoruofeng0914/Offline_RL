@@ -655,10 +655,10 @@ def test(config: TrainConfig, logger: Logger):
         model.load_state_dict(torch.load(os.path.join(config.checkpoint_dir, model_epoch)), strict=False)
         model.eval()
         if config.use_gating:
-            if any(name in config.env for name in ["hopper-medium", "walker2d-medium"]):
-                model.skip_gating = True
-            else:
-                model.skip_gating = False
+            # if any(name in config.env for name in ["hopper-medium", "walker2d-medium"]):
+            #     model.skip_gating = True
+            # else:
+            model.skip_gating = False
         else:
             model.skip_gating = True  # 消融：全局关闭门控
         # logger.info(f"Network: \n{str(model)}")
