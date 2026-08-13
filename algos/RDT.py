@@ -383,10 +383,13 @@ def train(config: TrainConfig, logger: Logger):
     config.norm_state_std = dataset.state_std
 
     # Obs Drift 使用 clean physical scale
-    clean_state_std, _, _, _ = func.get_state_std(config)
-    config.attack_state_std = clean_state_std
+    clean_state_std, clean_act_std, clean_rew_std, _ = func.get_state_std(config)
 
-    # Action / Reward 暂时保持原来的逻辑
+    config.attack_state_std = clean_state_std
+    config.attack_act_std = clean_act_std
+    config.attack_rew_std = clean_rew_std
+
+    # 原算法统计量保留
     config.act_std = dataset.act_std
     config.rew_std = dataset.rew_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
@@ -576,10 +579,13 @@ def test(config: TrainConfig, logger: Logger):
     config.norm_state_std = dataset.state_std
 
     # Obs Drift 使用 clean physical scale
-    clean_state_std, _, _, _ = func.get_state_std(config)
-    config.attack_state_std = clean_state_std
+    clean_state_std, clean_act_std, clean_rew_std, _ = func.get_state_std(config)
 
-    # Action / Reward 暂时保持原来的逻辑
+    config.attack_state_std = clean_state_std
+    config.attack_act_std = clean_act_std
+    config.attack_rew_std = clean_rew_std
+
+    # 原算法统计量保留
     config.act_std = dataset.act_std
     config.rew_std = dataset.rew_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")

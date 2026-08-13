@@ -211,10 +211,11 @@ def eval_rollout(
                 device=device
             )
         elif eval_attack_tag == "act":
-            # 动态获取环境边界与动作标准差
             action_low = env.action_space.low
             action_high = env.action_space.high
-            env_act_std = getattr(config, 'act_std', None)
+
+            env_act_std = config.attack_act_std
+
             nsaop_act_attacker = NSAOPActAttacker(
                 action_dim=model.action_dim,
                 action_std=env_act_std,
@@ -223,11 +224,11 @@ def eval_rollout(
                 eps_coeff=global_eps_coeff,
                 device=device
             )
+
         elif eval_attack_tag == "rew":
-            env_rew_std = getattr(config, 'rew_std', 1.0) if config else 1.0
             nsaop_rew_attacker = NSAOPRewAttacker(
-                rew_std=env_rew_std,
-                reward_scale=config.reward_scale if config else 1.0,
+                rew_std=config.attack_rew_std,
+                reward_scale=config.reward_scale,
                 eps_coeff=global_eps_coeff,
                 device=device
             )

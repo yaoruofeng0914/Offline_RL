@@ -799,7 +799,7 @@ def eval_actor_nsaop(config, env, actor):
         elif config.corruption_tag == "act":
             nsaop_act = NSAOPActAttacker(
                 action_dim=env.action_space.shape[0],
-                action_std=config.act_std,
+                action_std=config.attack_act_std,
                 action_low=env.action_space.low,
                 action_high=env.action_space.high,
                 eps_coeff=config.nsaop_eps_coeff,
@@ -808,7 +808,7 @@ def eval_actor_nsaop(config, env, actor):
 
         elif config.corruption_tag == "rew":
             nsaop_rew = NSAOPRewAttacker(
-                rew_std=config.rew_std,
+                rew_std=config.attack_rew_std,
                 reward_scale=1.0,
                 eps_coeff=config.nsaop_eps_coeff,
                 device=device,
@@ -915,9 +915,11 @@ def train(config: TrainConfig, logger: Logger):
     config.norm_state_mean = state_mean
     config.norm_state_std = state_std
 
-    clean_state_std, _, clean_rew_std, _ = func.get_state_std(config)
+    clean_state_std, clean_act_std, clean_rew_std, _ = func.get_state_std(config)
 
     config.attack_state_std = clean_state_std
+    config.attack_act_std = clean_act_std
+    config.attack_rew_std = clean_rew_std
 
     config.act_std = np.std(dataset["actions"], axis=0) + 1e-6
     config.rew_std = clean_rew_std
@@ -1139,9 +1141,11 @@ def test(config: TrainConfig, logger: Logger):
     config.norm_state_mean = state_mean
     config.norm_state_std = state_std
 
-    clean_state_std, _, clean_rew_std, _ = func.get_state_std(config)
+    clean_state_std, clean_act_std, clean_rew_std, _ = func.get_state_std(config)
 
     config.attack_state_std = clean_state_std
+    config.attack_act_std = clean_act_std
+    config.attack_rew_std = clean_rew_std
 
     config.act_std = np.std(dataset["actions"], axis=0) + 1e-6
     config.rew_std = clean_rew_std

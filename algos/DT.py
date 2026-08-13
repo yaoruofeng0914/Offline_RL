@@ -227,10 +227,18 @@ def train(config: TrainConfig, logger: Logger):
     config.norm_state_std = dataset.state_std
 
     # Obs Drift 使用 clean physical scale
-    clean_state_std, _, _, _ = func.get_state_std(config)
-    config.attack_state_std = clean_state_std
+    # 模型自己的 preprocessing
+    config.norm_state_mean = dataset.state_mean
+    config.norm_state_std = dataset.state_std
 
-    # Action / Reward 保持原 benchmark 逻辑
+    # Drift-Attack 固定使用 clean physical statistics
+    clean_state_std, clean_act_std, clean_rew_std, _ = func.get_state_std(config)
+
+    config.attack_state_std = clean_state_std
+    config.attack_act_std = clean_act_std
+    config.attack_rew_std = clean_rew_std
+
+    # 可以保留，避免影响旧代码/其他逻辑
     config.act_std = dataset.act_std
     config.rew_std = dataset.rew_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")
@@ -408,10 +416,18 @@ def test(config: TrainConfig, logger: Logger):
     config.norm_state_std = dataset.state_std
 
     # Obs Drift 使用 clean physical scale
-    clean_state_std, _, _, _ = func.get_state_std(config)
-    config.attack_state_std = clean_state_std
+    # 模型自己的 preprocessing
+    config.norm_state_mean = dataset.state_mean
+    config.norm_state_std = dataset.state_std
 
-    # Action / Reward 保持原 benchmark 逻辑
+    # Drift-Attack 固定使用 clean physical statistics
+    clean_state_std, clean_act_std, clean_rew_std, _ = func.get_state_std(config)
+
+    config.attack_state_std = clean_state_std
+    config.attack_act_std = clean_act_std
+    config.attack_rew_std = clean_rew_std
+
+    # 可以保留，避免影响旧代码/其他逻辑
     config.act_std = dataset.act_std
     config.rew_std = dataset.rew_std
     logger.info(f"Dataset: {len(dataset.dataset)} trajectories")

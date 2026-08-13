@@ -698,7 +698,7 @@ def eval_fn(config, env, model, eval_attacker=None):
                 elif config.corruption_tag == "act":
                     nsaop_attacker["act"] = NSAOPActAttacker(
                         action_dim=config.action_dim,
-                        action_std=config.act_std,
+                        action_std=config.attack_act_std,
                         action_low=env.action_space.low,
                         action_high=env.action_space.high,
                         eps_coeff=config.nsaop_eps_coeff,
@@ -707,7 +707,7 @@ def eval_fn(config, env, model, eval_attacker=None):
 
                 elif config.corruption_tag == "rew":
                     nsaop_attacker["rew"] = NSAOPRewAttacker(
-                        rew_std=config.rew_std,
+                        rew_std=config.attack_rew_std,
                         reward_scale=1.0,
                         eps_coeff=config.nsaop_eps_coeff,
                         device=config.device,
@@ -768,19 +768,18 @@ def train(config: TrainConfig, logger: Logger):
     # data & dataloader setup
     dataset = SequenceBuffer(config, logger)
     # Drift-Attack 使用 clean physical statistics
-    clean_state_std, _, clean_rew_std, _ = func.get_state_std(config)
+    clean_state_std, clean_act_std, clean_rew_std, _ = func.get_state_std(config)
 
     config.attack_state_std = clean_state_std
+    config.attack_act_std = clean_act_std
+    config.attack_rew_std = clean_rew_std
 
-    # DeFog 的 attacker 接收的是 raw env observation，
-    # 所以 attacker 本身不需要做额外的 normalization coordinate conversion
+    # DeFog Observation 保持现状
     config.norm_state_mean = np.zeros_like(clean_state_std)
     config.norm_state_std = np.ones_like(clean_state_std)
 
-    # Action 暂时保持原逻辑
+    # 原统计量可以保留
     config.act_std = np.std(dataset.actions, axis=0) + 1e-6
-
-    # Reward attack 使用 clean raw reward std
     config.rew_std = clean_rew_std
     logger.info(f"Dataset: {dataset.num_trajs} trajectories")
     # logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
@@ -964,19 +963,18 @@ def test(config: TrainConfig, logger: Logger):
     # data & dataloader setup
     dataset = SequenceBuffer(config, logger)
     # Drift-Attack 使用 clean physical statistics
-    clean_state_std, _, clean_rew_std, _ = func.get_state_std(config)
+    clean_state_std, clean_act_std, clean_rew_std, _ = func.get_state_std(config)
 
     config.attack_state_std = clean_state_std
+    config.attack_act_std = clean_act_std
+    config.attack_rew_std = clean_rew_std
 
-    # DeFog 的 attacker 接收的是 raw env observation，
-    # 所以 attacker 本身不需要做额外的 normalization coordinate conversion
+    # DeFog Observation 保持现状
     config.norm_state_mean = np.zeros_like(clean_state_std)
     config.norm_state_std = np.ones_like(clean_state_std)
 
-    # Action 暂时保持原逻辑
+    # 原统计量可以保留
     config.act_std = np.std(dataset.actions, axis=0) + 1e-6
-
-    # Reward attack 使用 clean raw reward std
     config.rew_std = clean_rew_std
     # logger.info(f"Dataset: {dataset.num_trajs} trajectories")
     logger.info(f"State mean: {dataset.state_mean}, std: {dataset.state_std}")
